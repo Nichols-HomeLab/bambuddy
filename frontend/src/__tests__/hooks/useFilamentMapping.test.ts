@@ -428,6 +428,24 @@ describe('buildLoadedFilaments - nozzle awareness', () => {
 
     expect(result[0].extruderId).toBeUndefined();
   });
+
+  it('uses per-slot extruder IDs for the Snapmaker U1 four-tool unit', () => {
+    const status = createPrinterStatus([
+      {
+        id: 0,
+        tray: [
+          { id: 0, tray_type: 'PLA', tray_color: 'FF0000', extruder_id: 0 },
+          { id: 1, tray_type: 'PETG', tray_color: '00FF00', extruder_id: 1 },
+          { id: 2, tray_type: 'ABS', tray_color: '0000FF', extruder_id: 2 },
+          { id: 3, tray_type: 'TPU', tray_color: 'FFFF00', extruder_id: 3 },
+        ],
+      },
+    ]);
+
+    const result = buildLoadedFilaments(status);
+
+    expect(result.map((filament) => filament.extruderId)).toEqual([0, 1, 2, 3]);
+  });
 });
 
 describe('computeAmsMapping - nozzle filtering', () => {

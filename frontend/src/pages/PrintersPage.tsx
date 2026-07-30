@@ -4679,6 +4679,7 @@ function PrinterCard({
                                 // Find tray data for this slot (may be undefined if data incomplete)
                                 // Use array index if available, as tray.id may not always be set
                                 const tray = ams.tray[slotIdx] || ams.tray.find(t => t.id === slotIdx);
+                                const slotExtruderId = tray?.extruder_id ?? mappedExtruderId;
                                 const hasFillLevel = tray?.tray_type && tray.remain >= 0;
                                 const isEmpty = !tray?.tray_type;
                                 const emptyKind = getEmptySlotKind(tray);
@@ -4800,6 +4801,11 @@ function PrinterCard({
                                     <div className="text-[9px] text-white font-bold truncate">
                                       {tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
                                     </div>
+                                    {printer.connection_type === 'snapmaker_moonraker' && (
+                                      <div className="text-[8px] text-bambu-green font-semibold">
+                                        Nozzle {(slotExtruderId ?? slotIdx) + 1}
+                                      </div>
+                                    )}
                                     {/* Fill bar */}
                                     <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
                                       {effectiveFill !== null && effectiveFill >= 0 && !isEmpty && tray && (
@@ -4883,7 +4889,9 @@ function PrinterCard({
                                                   material: tray?.tray_type ?? undefined,
                                                   profile: filamentData.profile,
                                                   color: filamentData.colorHex || '',
-                                                  location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                  location: printer.connection_type === 'snapmaker_moonraker'
+                                                    ? `Nozzle ${slotIdx + 1}`
+                                                    : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                                 },
                                               }),
                                               onUnassignSpool: (spoolmanSpool && !isBambuLabSpool(tray)) ? () => onUnassignSpoolmanSpool?.(spoolmanSpool.id) : undefined,
@@ -4908,7 +4916,9 @@ function PrinterCard({
                                                 material: tray?.tray_type ?? undefined,
                                                 profile: filamentData.profile,
                                                 color: filamentData.colorHex || '',
-                                                location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                location: printer.connection_type === 'snapmaker_moonraker'
+                                                  ? `Nozzle ${slotIdx + 1}`
+                                                  : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                               },
                                             }),
                                             onUnassignSpool: (assignment && !isBambuLabSpool(tray)) ? () => onUnassignSpool?.(printer.id, ams.id, slotIdx) : undefined,
@@ -4925,7 +4935,7 @@ function PrinterCard({
                                             trayColor: tray?.tray_color || undefined,
                                             traySubBrands: tray?.tray_sub_brands || undefined,
                                             trayInfoIdx: tray?.tray_info_idx || undefined,
-                                            extruderId: mappedExtruderId,
+                                            extruderId: slotExtruderId,
                                             caliIdx: tray?.cali_idx,
                                             savedPresetId: slotPreset?.preset_id,
                                           }),
@@ -4948,7 +4958,7 @@ function PrinterCard({
                                             amsId: ams.id,
                                             trayId: slotIdx,
                                             trayCount: ams.tray.length,
-                                            extruderId: mappedExtruderId,
+                                            extruderId: slotExtruderId,
                                           }),
                                         }}
                                         onAssignSpool={() => setAssignSpoolModal({
@@ -4960,7 +4970,9 @@ function PrinterCard({
                                             material: undefined,
                                             profile: '',
                                             color: '',
-                                            location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                            location: printer.connection_type === 'snapmaker_moonraker'
+                                              ? `Nozzle ${slotIdx + 1}`
+                                              : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                           },
                                         })}
                                       >
@@ -6590,6 +6602,8 @@ export function AddPrinterModal({
     serial_number: '',
     ip_address: '',
     access_code: '',
+    connection_type: 'bambu',
+    connection_port: 7125,
     model: '',
     location: '',
     auto_archive: true,
@@ -6645,6 +6659,10 @@ export function AddPrinterModal({
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.connection_type === 'snapmaker_moonraker') {
+      onAdd({ ...form, model: 'Snapmaker U1', connection_port: form.connection_port || 7125 });
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
@@ -6791,7 +6809,28 @@ export function AddPrinterModal({
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">{t('printers.addPrinter')}</h2>
 
+          <div className="mb-4">
+            <label className="block text-sm text-bambu-gray mb-1">Printer protocol</label>
+            <select
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+              value={form.connection_type || 'bambu'}
+              onChange={(e) => {
+                const connection_type = e.target.value as 'bambu' | 'snapmaker_moonraker';
+                setForm({
+                  ...form,
+                  connection_type,
+                  connection_port: connection_type === 'snapmaker_moonraker' ? 7125 : 7125,
+                  model: connection_type === 'snapmaker_moonraker' ? 'Snapmaker U1' : '',
+                });
+              }}
+            >
+              <option value="bambu">Bambu Lab (LAN MQTT)</option>
+              <option value="snapmaker_moonraker">Snapmaker U1 (Moonraker)</option>
+            </select>
+          </div>
+
           {/* Discovery Section */}
+          {form.connection_type !== 'snapmaker_moonraker' && (
           <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
             {/* Subnet picker — always visible. The dropdown lists detected
                 interface subnets and a "Custom..." sentinel that reveals
@@ -6918,6 +6957,7 @@ export function AddPrinterModal({
               </p>
             )}
           </div>
+          )}
           <form onSubmit={handleAddSubmit} className="space-y-4">
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
@@ -6957,19 +6997,35 @@ export function AddPrinterModal({
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
-                required
+                required={form.connection_type !== 'snapmaker_moonraker'}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.access_code}
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
-                placeholder={t('printers.modal.fromPrinterSettings')}
+                placeholder={form.connection_type === 'snapmaker_moonraker' ? 'Moonraker API key (optional)' : t('printers.modal.fromPrinterSettings')}
               />
             </div>
+            {form.connection_type === 'snapmaker_moonraker' && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">Moonraker port</label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={65535}
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.connection_port || 7125}
+                  onChange={(e) => setForm({ ...form, connection_port: Number(e.target.value) })}
+                />
+                <p className="text-xs text-bambu-gray mt-1">The standard Moonraker API port is 7125.</p>
+              </div>
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
               <select
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.model || ''}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
+                disabled={form.connection_type === 'snapmaker_moonraker'}
               >
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
@@ -6998,6 +7054,9 @@ export function AddPrinterModal({
                 <optgroup label="X2 Series">
                   <option value="X2D">X2D</option>
                 </optgroup>
+                <optgroup label="Snapmaker">
+                  <option value="Snapmaker U1">Snapmaker U1</option>
+                </optgroup>
               </select>
             </div>
             <div>
@@ -7023,7 +7082,7 @@ export function AddPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
-            <button
+            {form.connection_type !== 'snapmaker_moonraker' && <button
               type="button"
               onClick={() => setShowDiagnostic(true)}
               disabled={!form.ip_address.trim()}
@@ -7031,7 +7090,7 @@ export function AddPrinterModal({
             >
               <Stethoscope className="w-4 h-4" />
               {t('diagnostic.runButton')}
-            </button>
+            </button>}
             {saveWarning ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
                 <div className="flex items-start gap-2">
@@ -7376,6 +7435,8 @@ function EditPrinterModal({
     name: printer.name,
     ip_address: printer.ip_address,
     access_code: '',
+    connection_type: printer.connection_type || 'bambu',
+    connection_port: printer.connection_port || 7125,
     model: printer.model || '',
     location: printer.location || '',
     auto_archive: printer.auto_archive,
@@ -7410,6 +7471,8 @@ function EditPrinterModal({
     const data: Partial<PrinterCreate> = {
       name: form.name,
       ip_address: form.ip_address,
+      connection_type: form.connection_type,
+      connection_port: form.connection_port,
       model: form.model || undefined,
       location: form.location || undefined,
       auto_archive: form.auto_archive,
@@ -7424,6 +7487,10 @@ function EditPrinterModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.connection_type === 'snapmaker_moonraker') {
+      doSave();
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
@@ -7452,6 +7519,21 @@ function EditPrinterModal({
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">{t('printers.editPrinter')}</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm text-bambu-gray mb-1">Printer protocol</label>
+              <select
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.connection_type}
+                onChange={(e) => setForm({
+                  ...form,
+                  connection_type: e.target.value as 'bambu' | 'snapmaker_moonraker',
+                  model: e.target.value === 'snapmaker_moonraker' ? 'Snapmaker U1' : form.model,
+                })}
+              >
+                <option value="bambu">Bambu Lab (LAN MQTT)</option>
+                <option value="snapmaker_moonraker">Snapmaker U1 (Moonraker)</option>
+              </select>
+            </div>
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
               <input
@@ -7492,15 +7574,30 @@ function EditPrinterModal({
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.access_code}
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
-                placeholder={t('printers.accessCodePlaceholder')}
+                placeholder={form.connection_type === 'snapmaker_moonraker' ? 'Moonraker API key (leave unchanged)' : t('printers.accessCodePlaceholder')}
               />
             </div>
+            {form.connection_type === 'snapmaker_moonraker' && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">Moonraker port</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  required
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.connection_port}
+                  onChange={(e) => setForm({ ...form, connection_port: Number(e.target.value) })}
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.model')}</label>
               <select
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.model}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
+                disabled={form.connection_type === 'snapmaker_moonraker'}
               >
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
@@ -7528,6 +7625,9 @@ function EditPrinterModal({
                 </optgroup>
                 <optgroup label="X2 Series">
                   <option value="X2D">X2D</option>
+                </optgroup>
+                <optgroup label="Snapmaker">
+                  <option value="Snapmaker U1">Snapmaker U1</option>
                 </optgroup>
               </select>
             </div>

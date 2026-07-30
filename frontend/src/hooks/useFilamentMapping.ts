@@ -27,7 +27,7 @@ export function buildLoadedFilaments(printerStatus: PrinterStatus | undefined): 
   // dual-nozzle hardware exposes multiple external feeds) each independently
   // imply dual-nozzle — keep them as fallbacks for any firmware rev that
   // surfaces one signal but not the other. (#1257)
-  const hasDualNozzle =
+  const hasMultipleNozzles =
     Boolean(printerStatus?.nozzles?.[1]?.nozzle_diameter)
     || (amsExtruderMap && Object.keys(amsExtruderMap).length > 0)
     || (printerStatus?.vt_tray?.length ?? 0) > 1;
@@ -50,7 +50,7 @@ export function buildLoadedFilaments(printerStatus: PrinterStatus | undefined): 
           globalTrayId: getGlobalTrayId(amsUnit.id, tray.id, false),
           trayInfoIdx: tray.tray_info_idx || '',
           traySubBrands: tray.tray_sub_brands || '',
-          extruderId: amsExtruderMap?.[String(amsUnit.id)],
+          extruderId: tray.extruder_id ?? amsExtruderMap?.[String(amsUnit.id)],
           remain: tray.remain ?? -1,
         });
       }
@@ -75,7 +75,7 @@ export function buildLoadedFilaments(printerStatus: PrinterStatus | undefined): 
         globalTrayId: trayId,
         trayInfoIdx: extTray.tray_info_idx || '',
         traySubBrands: extTray.tray_sub_brands || '',
-        extruderId: hasDualNozzle ? (255 - trayId) : undefined,
+        extruderId: hasMultipleNozzles ? (255 - trayId) : undefined,
         remain: extTray.remain ?? -1,
       });
     }

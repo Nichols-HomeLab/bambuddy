@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import tempfile
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +58,34 @@ logger = logging.getLogger(__name__)
 # sub-200 ms files.
 _DISPATCH_PROGRESS_BYTE_STEP = 256 * 1024
 _DISPATCH_PROGRESS_MIN_INTERVAL_SECS = 0.2
+
+
+def extract_plate_gcode(source: Path, plate_id: int) -> Path:
+    """Return raw G-code for Moonraker, extracting a selected 3MF plate when needed.
+
+    Snapmaker U1 accepts ordinary G-code through Moonraker, while Bambuddy's
+    archive and slicer paths normally store Orca projects as ``.gcode.3mf``.
+    The returned temporary file is owned by the caller and must be removed.
+    """
+    if not zipfile.is_zipfile(source):
+        return source
+
+    with zipfile.ZipFile(source) as archive:
+        preferred = f"Metadata/plate_{plate_id}.gcode"
+        names = [name for name in archive.namelist() if name.lower().endswith(".gcode")]
+        if preferred in names:
+            member = preferred
+        elif len(names) == 1:
+            member = names[0]
+        else:
+            raise ValueError(f"Plate {plate_id} G-code not found in {source.name}")
+        with (
+            archive.open(member) as input_file,
+            tempfile.NamedTemporaryFile(prefix="bambuddy-snapmaker-", suffix=".gcode", delete=False) as output_file,
+        ):
+            while chunk := input_file.read(1024 * 1024):
+                output_file.write(chunk)
+            return Path(output_file.name)
 
 
 class _UploadProgressBridge:
@@ -3245,6 +3275,7 @@ class PrintScheduler:
 
         # G-code injection for auto-print systems (#422)
         injected_path = None
+        moonraker_gcode_path: Path | None = None
         if item.gcode_injection:
             try:
                 snippets_raw = await self._get_setting(db, "gcode_snippets")
@@ -3269,16 +3300,40 @@ class PrintScheduler:
             except Exception as e:
                 logger.warning("Queue item %s: G-code injection failed, using original: %s", item.id, e)
 
-        # Upload to root directory (not /cache/) - the start_print command references
-        # files by name only (ftp://{filename}), so they must be in the root
+        is_snapmaker = printer.connection_type == "snapmaker_moonraker"
+        if is_snapmaker:
+            try:
+                prepared_path = extract_plate_gcode(file_path, item.plate_id or 1)
+                if prepared_path != file_path:
+                    moonraker_gcode_path = prepared_path
+                    file_path = prepared_path
+            except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                if injected_path and injected_path.exists():
+                    injected_path.unlink(missing_ok=True)
+                item.status = "failed"
+                item.error_message = f"Could not extract plate G-code for Snapmaker U1: {exc}"
+                item.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                return
+
+        # Bambu starts files from the FTP root. Snapmaker's Moonraker endpoint
+        # accepts a plain .gcode name in its gcodes root.
         remote_filename = derive_remote_filename(filename)
+        if is_snapmaker:
+            base_name = Path(filename).name
+            for suffix in (".gcode.3mf", ".3mf", ".gcode"):
+                if base_name.lower().endswith(suffix):
+                    base_name = base_name[: -len(suffix)]
+                    break
+            remote_filename = derive_remote_filename(f"{base_name}.gcode")
         remote_path = f"/{remote_filename}"
 
         # Get FTP retry settings
         ftp_retry_enabled, ftp_retry_count, ftp_retry_delay, ftp_timeout = await get_ftp_retry_settings()
 
         logger.info(
-            f"Queue item {item.id}: FTP upload starting - printer={printer.name} ({printer.model}), "
+            f"Queue item {item.id}: {'Moonraker' if is_snapmaker else 'FTP'} upload starting - "
+            f"printer={printer.name} ({printer.model}), "
             f"ip={printer.ip_address}, file={remote_filename}, local_path={file_path}, "
             f"retry_enabled={ftp_retry_enabled}, retry_count={ftp_retry_count}, timeout={ftp_timeout}"
         )
@@ -3296,16 +3351,21 @@ class PrintScheduler:
         # pending->printing CAS) transparently open a fresh transaction.
         await db.commit()
 
-        # Delete existing file if present (avoids 553 error on overwrite)
+        protocol_client = printer_manager.get_client(printer.id)
+
+        # Delete existing file if present (avoids overwrite errors)
         try:
             logger.debug("Queue item %s: Deleting existing file %s if present...", item.id, remote_path)
-            delete_result = await delete_file_async(
-                printer.ip_address,
-                printer.access_code,
-                remote_path,
-                socket_timeout=ftp_timeout,
-                printer_model=printer.model,
-            )
+            if is_snapmaker and protocol_client:
+                delete_result = await protocol_client.delete_file(remote_filename)
+            else:
+                delete_result = await delete_file_async(
+                    printer.ip_address,
+                    printer.access_code,
+                    remote_path,
+                    socket_timeout=ftp_timeout,
+                    printer_model=printer.model,
+                )
             logger.debug("Queue item %s: Delete result: %s", item.id, delete_result)
         except Exception as e:
             logger.debug("Queue item %s: Delete failed (may not exist): %s", item.id, e)
@@ -3337,7 +3397,9 @@ class PrintScheduler:
         upload_error: str | None = None
 
         try:
-            if ftp_retry_enabled:
+            if is_snapmaker and protocol_client:
+                uploaded = await protocol_client.upload_file(file_path, remote_filename, progress_bridge)
+            elif ftp_retry_enabled:
                 uploaded = await with_ftp_retry(
                     upload_file_async,
                     printer.ip_address,
@@ -3370,23 +3432,27 @@ class PrintScheduler:
             logger.error("Queue item %s: upload deadline exceeded: %s", item.id, e)
         except Exception as e:
             uploaded = False
-            logger.error("Queue item %s: FTP error: %s (type: %s)", item.id, e, type(e).__name__)
+            logger.error("Queue item %s: upload error: %s (type: %s)", item.id, e, type(e).__name__)
 
         # Clean up injected temp file after upload attempt
         if injected_path and injected_path.exists():
             injected_path.unlink(missing_ok=True)
+        if moonraker_gcode_path and moonraker_gcode_path.exists():
+            moonraker_gcode_path.unlink(missing_ok=True)
 
         if not uploaded:
             error_msg = upload_error or (
-                "Failed to upload file to printer. Check if SD card is inserted and properly formatted (FAT32/exFAT). "
-                "See server logs for detailed diagnostics."
+                "Failed to upload file to printer through Moonraker. Check the U1 network connection and API key."
+                if is_snapmaker
+                else "Failed to upload file to printer. Check if SD card is inserted and properly formatted "
+                "(FAT32/exFAT). See server logs for detailed diagnostics."
             )
             item.status = "failed"
             item.error_message = error_msg
             item.completed_at = datetime.now(timezone.utc)
             await db.commit()
             logger.error(
-                f"Queue item {item.id}: FTP upload failed - printer={printer.name}, model={printer.model}, "
+                f"Queue item {item.id}: upload failed - printer={printer.name}, model={printer.model}, "
                 f"ip={printer.ip_address}. Check logs above for storage diagnostics and specific error codes."
             )
 
@@ -3468,13 +3534,16 @@ class PrintScheduler:
                 item.id,
             )
             try:
-                await delete_file_async(
-                    printer.ip_address,
-                    printer.access_code,
-                    remote_path,
-                    socket_timeout=ftp_timeout,
-                    printer_model=printer.model,
-                )
+                if is_snapmaker and protocol_client:
+                    await protocol_client.delete_file(remote_filename)
+                else:
+                    await delete_file_async(
+                        printer.ip_address,
+                        printer.access_code,
+                        remote_path,
+                        socket_timeout=ftp_timeout,
+                        printer_model=printer.model,
+                    )
             except Exception as cleanup_err:
                 logger.debug(
                     "Queue item %s: best-effort cleanup of uploaded file failed: %s",
@@ -3567,7 +3636,7 @@ class PrintScheduler:
             # Register the local 3MF in the cover-cache so /cover skips FTP
             # (#1166 follow-up). file_path was resolved earlier from either the
             # archive or the library file row.
-            if file_path is not None:
+            if file_path is not None and not is_snapmaker:
                 cache_3mf_download(item.printer_id, remote_filename, file_path)
 
             # Hold the printer against further dispatches until the watchdog
@@ -3641,12 +3710,15 @@ class PrintScheduler:
         else:
             # Clean up uploaded file from SD card to prevent phantom prints
             try:
-                await delete_file_async(
-                    printer.ip_address,
-                    printer.access_code,
-                    remote_path,
-                    printer_model=printer.model,
-                )
+                if is_snapmaker and protocol_client:
+                    await protocol_client.delete_file(remote_filename)
+                else:
+                    await delete_file_async(
+                        printer.ip_address,
+                        printer.access_code,
+                        remote_path,
+                        printer_model=printer.model,
+                    )
             except Exception:
                 pass  # Best-effort — don't fail the error handler
 

@@ -1,5 +1,16 @@
 # Slicer-API sidecar (optional)
 
+This fork defaults to the Snapmaker Orca 2.3.5 sidecar for Snapmaker U1.
+Its pre-built image is
+`git.nicholstech.org/nichols-homelab/snapmaker-orca-api:2.3.5`, and its
+source lives in both
+[Gitea](https://git.nicholstech.org/Nichols-HomeLab/orca-slicer-api) and
+[GitHub](https://github.com/Nichols-HomeLab/orca-slicer-api).
+
+Set Bambuddy's **Slicer sidecar URL** to
+`http://snapmaker-orca-api:3000` on a shared Docker network, or to
+`http://<sidecar-host>:3003` when accessing the published host port.
+
 Self-contained Docker Compose stack that runs HTTP wrappers around the
 OrcaSlicer and/or Bambu Studio CLI. Bambuddy's **Slice** action calls
 these to slice models server-side, no desktop slicer required.

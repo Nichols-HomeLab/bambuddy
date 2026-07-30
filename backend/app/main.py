@@ -1204,7 +1204,7 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
 
             result = await db.execute(select(Printer).where(Printer.id == printer_id))
             printer = result.scalar_one_or_none()
-            if printer and printer.nozzle_count != 2:
+            if printer and printer.connection_type != "snapmaker_moonraker" and printer.nozzle_count != 2:
                 printer.nozzle_count = 2
                 await db.commit()
                 logging.getLogger(__name__).info(

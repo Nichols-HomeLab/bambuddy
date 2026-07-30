@@ -354,9 +354,11 @@ export interface Printer {
   // PRINTERS_UPDATE — Admin / Operator JWTs or auth-disabled mode. Viewers and
   // API keys receive a Printer without this field.
   access_code?: string;
+  connection_type?: 'bambu' | 'snapmaker_moonraker';
+  connection_port?: number;
   model: string | null;
   location: string | null;  // Group/location name
-  nozzle_count: number;  // 1 or 2, auto-detected from MQTT
+  nozzle_count: number;  // 1, 2, or 4 (Snapmaker U1)
   is_active: boolean;
   auto_archive: boolean;
   external_camera_url: string | null;
@@ -408,6 +410,7 @@ export interface AMSTray {
   drying_time: number | null;      // RFID-recommended drying time (hours)
   state: number | null;            // AMS tray state: 9=empty, 10=spool present not loaded, 11=loaded
   exists?: boolean | null;         // Firmware tray_exist_bits: spool physically present (non-RFID → "?" not "Empty", #2527)
+  extruder_id?: number | null;      // Physical tool/nozzle fed by this slot
 }
 
 export interface AMSUnit {
@@ -499,6 +502,10 @@ export interface PrinterStatus {
     nozzle_2?: number;  // Second nozzle for H2 series (dual nozzle)
     nozzle_2_target?: number;
     nozzle_2_heating?: boolean;  // Actual heater state from MQTT
+    nozzle_3?: number;  // Snapmaker U1 tool 3
+    nozzle_3_target?: number;
+    nozzle_4?: number;  // Snapmaker U1 tool 4
+    nozzle_4_target?: number;
     chamber?: number;
     chamber_target?: number;
     chamber_heating?: boolean;  // Actual heater state from MQTT
@@ -587,6 +594,8 @@ export interface PrinterCreate {
   serial_number: string;
   ip_address: string;
   access_code: string;
+  connection_type?: 'bambu' | 'snapmaker_moonraker';
+  connection_port?: number;
   model?: string;
   location?: string;
   auto_archive?: boolean;

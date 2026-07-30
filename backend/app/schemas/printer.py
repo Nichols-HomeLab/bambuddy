@@ -29,6 +29,8 @@ class PrinterBase(BaseModel):
         max_length=253,
         pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
+    connection_type: str = Field(default="bambu", pattern=r"^(bambu|snapmaker_moonraker)$")
+    connection_port: int = Field(default=7125, ge=1, le=65535)
     model: str | None = None
     location: str | None = None  # Group/location name
     auto_archive: bool = True
@@ -43,7 +45,7 @@ class PrinterCreate(PrinterBase):
     # access_code lives on the input shapes only — never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    access_code: str = Field(default="", max_length=20)
 
 
 class PlateDetectionROI(BaseModel):
@@ -63,6 +65,8 @@ class PrinterUpdate(BaseModel):
         pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
     access_code: str | None = None
+    connection_type: str | None = Field(default=None, pattern=r"^(bambu|snapmaker_moonraker)$")
+    connection_port: int | None = Field(default=None, ge=1, le=65535)
     model: str | None = None
     location: str | None = None
     is_active: bool | None = None
@@ -80,7 +84,7 @@ class PrinterUpdate(BaseModel):
 class PrinterResponse(PrinterBase):
     id: int
     is_active: bool
-    nozzle_count: int = 1  # 1 or 2, auto-detected from MQTT
+    nozzle_count: int = 1  # 1, 2, or 4 (Snapmaker U1)
     print_hours_offset: float = 0.0
     external_camera_url: str | None = None
     external_camera_type: str | None = None
@@ -103,6 +107,8 @@ class PrinterResponse(PrinterBase):
             "name": printer.name,
             "serial_number": printer.serial_number,
             "ip_address": printer.ip_address,
+            "connection_type": printer.connection_type,
+            "connection_port": printer.connection_port,
             "model": printer.model,
             "location": printer.location,
             "auto_archive": printer.auto_archive,
@@ -185,6 +191,9 @@ class AMSTray(BaseModel):
     # True for a non-RFID spool the firmware can't identify — the UI shows "?" rather
     # than "Empty" (#2527). None when the bitmask was unavailable (→ state-based fallback).
     exists: bool | None = None
+    # Physical tool/nozzle this slot feeds. Used by four-tool printers such as
+    # Snapmaker U1 where every filament bay maps directly to one nozzle.
+    extruder_id: int | None = None
 
 
 class AMSUnit(BaseModel):

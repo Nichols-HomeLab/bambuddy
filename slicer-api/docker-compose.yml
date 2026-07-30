@@ -6,7 +6,7 @@
 # URLs configured in Settings -> Slicer.
 #
 #   bambu-studio-api  → host port 3001 (BambuStudio CLI)
-#   orca-slicer-api   → host port 3003 (OrcaSlicer CLI)
+#   snapmaker-orca-api → host port 3003 (Snapmaker Orca CLI, U1 profiles)
 #
 # Bambuddy's virtual-printer feature reserves host ports 3000 and 3002,
 # which is why the OrcaSlicer sidecar sits on 3003. Override either port
@@ -26,14 +26,15 @@
 # at all.
 
 services:
-  orca-slicer-api:
-    image: ghcr.io/maziggy/orca-slicer-api:${SIDECAR_TAG:-latest}
-    container_name: orca-slicer-api
+  snapmaker-orca-api:
+    image: git.nicholstech.org/nichols-homelab/snapmaker-orca-api:${SNAPMAKER_ORCA_VERSION:-2.3.5}
+    platform: linux/amd64
+    container_name: snapmaker-orca-api
     restart: unless-stopped
     ports:
       - "${ORCA_API_PORT:-3003}:3000"
     volumes:
-      - ./data/orca:/app/data
+      - ./data/snapmaker-orca:/app/data
     environment:
       NODE_ENV: production
       PORT: "3000"

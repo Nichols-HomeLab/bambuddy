@@ -14,9 +14,11 @@ class Printer(Base):
     serial_number: Mapped[str] = mapped_column(String(50), unique=True)
     ip_address: Mapped[str] = mapped_column(String(253))
     access_code: Mapped[str] = mapped_column(String(20))
+    connection_type: Mapped[str] = mapped_column(String(20), default="bambu")
+    connection_port: Mapped[int] = mapped_column(default=7125)
     model: Mapped[str | None] = mapped_column(String(50))
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
-    nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
+    nozzle_count: Mapped[int] = mapped_column(default=1)  # 1, 2, or 4 (Snapmaker U1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add

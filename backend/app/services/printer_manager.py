@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
+from backend.app.services.snapmaker_moonraker import SnapmakerMoonrakerClient
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +214,7 @@ _DRYING_MIN_FIRMWARE: dict[str, str] = {
     "N7": "01.02.00.00",  # P2S internal model code
 }
 # Models that definitely don't support AMS drying (no AMS 2 Pro / AMS-HT compatibility)
-_DRYING_UNSUPPORTED_MODELS = frozenset({"A1", "A1MINI", "A1-MINI", "A1 MINI", "O1S", "N1", "N2S"})
+_DRYING_UNSUPPORTED_MODELS = frozenset({"A1", "A1MINI", "A1-MINI", "A1 MINI", "O1S", "N1", "N2S", "SNAPMAKER U1"})
 
 # Models whose AMS can dry, but only from the printer's own touchscreen. Bambu's P1
 # manual is explicit: "P1S connected AMS drying functions may only be controlled from
@@ -315,7 +316,7 @@ class PrinterManager:
     """Manager for multiple printer connections."""
 
     def __init__(self):
-        self._clients: dict[int, BambuMQTTClient] = {}
+        self._clients: dict[int, BambuMQTTClient | SnapmakerMoonrakerClient] = {}
         self._models: dict[int, str | None] = {}  # Cache printer models for feature detection
         self._printer_info: dict[int, PrinterInfo] = {}  # Cache printer name/serial for callbacks
         self._on_print_start: Callable[[int, dict], None] | None = None
@@ -590,31 +591,79 @@ class PrinterManager:
             if self._on_assignment_verified:
                 self._schedule_async(self._on_assignment_verified(printer_id, ams_id, tray_id, verified, detail))
 
-        client = BambuMQTTClient(
-            ip_address=printer.ip_address,
-            serial_number=printer.serial_number,
-            access_code=printer.access_code,
-            model=printer.model,
-            on_state_change=on_state_change,
-            on_print_start=on_print_start,
-            on_print_complete=on_print_complete,
-            on_ams_change=on_ams_change,
-            on_layer_change=on_layer_change,
-            on_bed_temp_update=on_bed_temp_update,
-            on_drying_complete=on_drying_complete,
-            on_print_running_observed=on_print_running_observed,
-            on_finish_photo_moment=on_finish_photo_moment,
-            on_assignment_verified=on_assignment_verified,
-        )
+        common_callbacks = {
+            "on_state_change": on_state_change,
+            "on_print_start": on_print_start,
+            "on_print_complete": on_print_complete,
+            "on_ams_change": on_ams_change,
+            "on_layer_change": on_layer_change,
+            "on_bed_temp_update": on_bed_temp_update,
+            "on_assignment_verified": on_assignment_verified,
+        }
+        if printer.connection_type == "snapmaker_moonraker":
+            client = SnapmakerMoonrakerClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                access_code=printer.access_code,
+                port=printer.connection_port,
+                model=printer.model,
+                **common_callbacks,
+            )
+        else:
+            client = BambuMQTTClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                access_code=printer.access_code,
+                model=printer.model,
+                on_drying_complete=on_drying_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_finish_photo_moment=on_finish_photo_moment,
+                **common_callbacks,
+            )
 
         client.connect()
         self._clients[printer_id] = client
         self._models[printer_id] = printer.model  # Cache model for feature detection
         self._printer_info[printer_id] = PrinterInfo(printer.name, printer.serial_number)
 
+        if printer.connection_type == "snapmaker_moonraker":
+            await self._hydrate_snapmaker_filaments(printer_id, client)
+
         # Wait a moment for connection
         await asyncio.sleep(1)
         return client.state.connected
+
+    @staticmethod
+    async def _hydrate_snapmaker_filaments(printer_id: int, client: SnapmakerMoonrakerClient) -> None:
+        """Restore persisted inventory assignments into the U1's virtual tool slots."""
+        from sqlalchemy.orm import selectinload
+
+        from backend.app.core.database import async_session
+        from backend.app.models.spool_assignment import SpoolAssignment
+
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(SpoolAssignment)
+                    .options(selectinload(SpoolAssignment.spool))
+                    .where(SpoolAssignment.printer_id == printer_id, SpoolAssignment.ams_id == 0)
+                )
+                for assignment in result.scalars():
+                    if not 0 <= assignment.tray_id <= 3:
+                        continue
+                    spool = assignment.spool
+                    client.ams_set_filament_setting(
+                        ams_id=0,
+                        tray_id=assignment.tray_id,
+                        tray_type=spool.material,
+                        tray_sub_brands=" ".join(filter(None, (spool.brand, spool.material, spool.subtype))),
+                        tray_color=spool.rgba or "FFFFFFFF",
+                        tray_info_idx=spool.slicer_filament or "",
+                        nozzle_temp_min=spool.nozzle_temp_min,
+                        nozzle_temp_max=spool.nozzle_temp_max,
+                    )
+        except Exception as exc:
+            logger.warning("Could not restore Snapmaker U1 filament assignments for printer %s: %s", printer_id, exc)
 
     def disconnect_printer(self, printer_id: int, timeout: float = 0):
         """Disconnect from a printer."""
@@ -670,7 +719,7 @@ class PrinterManager:
         ``BambuMQTTClient``).
         """
         client = self._clients.get(printer_id)
-        return client._drying_targets if client else None
+        return getattr(client, "_drying_targets", None) if client else None
 
     def get_all_statuses(self) -> dict[int, PrinterState]:
         """Get status of all connected printers (checks for stale connections)."""
@@ -689,8 +738,8 @@ class PrinterManager:
             return client.check_staleness()
         return False
 
-    def get_client(self, printer_id: int) -> BambuMQTTClient | None:
-        """Get the MQTT client for a printer."""
+    def get_client(self, printer_id: int) -> BambuMQTTClient | SnapmakerMoonrakerClient | None:
+        """Get the active protocol client for a printer."""
         return self._clients.get(printer_id)
 
     def mark_printer_offline(self, printer_id: int):
@@ -878,6 +927,8 @@ class PrinterManager:
         ip_address: str,
         serial_number: str,
         access_code: str,
+        connection_type: str = "bambu",
+        connection_port: int = 7125,
     ) -> dict:
         """Test connection to a printer without persisting.
 
@@ -889,6 +940,18 @@ class PrinterManager:
         original synchronous teardown produced the #1445 "Docker container
         hangs" symptom on P1S when called from POST /printers/.
         """
+        if connection_type == "snapmaker_moonraker":
+            try:
+                return await asyncio.to_thread(
+                    SnapmakerMoonrakerClient.probe,
+                    ip_address,
+                    connection_port,
+                    access_code,
+                )
+            except Exception as exc:
+                logger.info("Snapmaker Moonraker probe failed for %s:%s: %s", ip_address, connection_port, exc)
+                return {"success": False, "state": None, "model": "Snapmaker U1", "error": str(exc)}
+
         client = BambuMQTTClient(
             ip_address=ip_address,
             serial_number=serial_number,
@@ -1151,6 +1214,7 @@ def printer_state_to_dict(
                         "tray_uuid": tray_uuid,
                         "nozzle_temp_min": tray.get("nozzle_temp_min"),
                         "nozzle_temp_max": tray.get("nozzle_temp_max"),
+                        "extruder_id": tray.get("extruder_id"),
                         "drying_temp": tray.get("drying_temp"),
                         "drying_time": tray.get("drying_time"),
                         "state": state_val,

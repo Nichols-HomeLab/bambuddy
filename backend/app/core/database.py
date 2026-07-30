@@ -3783,6 +3783,12 @@ async def run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN fs_modified_at TIMESTAMP")
         await _safe_execute(conn, "ALTER TABLE library_folders ADD COLUMN fs_modified_at TIMESTAMP")
 
+    # Printer transport selection for non-Bambu Moonraker devices. Existing
+    # rows remain Bambu MQTT printers; Snapmaker U1 rows opt in explicitly and
+    # default to Moonraker's standard port.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN connection_type VARCHAR(20) DEFAULT 'bambu'")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN connection_port INTEGER DEFAULT 7125")
+
     # Migration: Disambiguate the four ``user_print_*`` notification template
     # names by appending " Email" (#1792). See ``_migrate_rename_user_print_template_names``.
     await _migrate_rename_user_print_template_names(conn)

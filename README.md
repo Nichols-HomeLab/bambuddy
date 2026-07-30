@@ -100,6 +100,7 @@ Perfect for remote print farms, traveling makers, or accessing your home printer
 **No desktop slicer required.** Drop an STL or 3MF into Bambuddy's File Manager, hit **Slice**, and the result lands as a ready-to-print `.gcode.3mf` in the same folder — without ever opening Bambu Studio or Orca Slicer.
 
 - 🍰 **One-click slicing** — Slice from any browser. The job runs server-side in a [tiny sidecar container](slicer-api/README.md), progress streams back as a toast, and the sliced file appears in your library when it's done.
+- 🔧 **Snapmaker U1 support** — Connect through Moonraker, assign filament to all four nozzles, discover its external camera, and slice with the [Snapmaker Orca sidecar](docs/snapmaker-u1.md).
 - 📱 **Slice from your phone or tablet** — Bambuddy's PWA + the new server-side slicer means you can drop an STL in from mobile and queue a print without ever touching a desktop.
 - 🎒 **Bring your own profiles** — Import a `Printer Preset Bundle` (`.bbscfg`) exported from Bambu Studio: pick a curated **printer + process + filament** triplet from a dropdown in the Slice dialog, no more juggling JSON files.
 - 🔄 **Re-slice for a different printer in one click** — Open any sliced archive in Bambuddy and re-slice it for any printer, including across the single-nozzle ↔ dual-nozzle (H2D / H2D Pro) boundary that BambuStudio's CLI would normally reject. Bambuddy detects the class change and auto-arranges objects laid out for the source bed (e.g. X1C 256×256) so they land safely on the target (e.g. H2D 350×320 with its per-nozzle dead zones).

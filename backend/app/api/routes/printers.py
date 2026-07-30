@@ -139,10 +139,15 @@ async def create_printer(
     if result.scalar_one_or_none():
         raise HTTPException(400, "Printer with this serial number already exists")
 
+    if printer_data.connection_type == "bambu" and not printer_data.access_code:
+        raise HTTPException(400, "Bambu LAN access code is required")
+
     test_result = await printer_manager.test_connection(
         ip_address=printer_data.ip_address,
         serial_number=printer_data.serial_number,
         access_code=printer_data.access_code,
+        connection_type=printer_data.connection_type,
+        connection_port=printer_data.connection_port,
     )
     if not test_result.get("success"):
         # The frontend renders the user-facing message via i18n on `code`;
@@ -152,14 +157,26 @@ async def create_printer(
             detail={
                 "code": "printer_connection_failed",
                 "message": (
-                    "Could not connect to the printer. Verify IP address, serial number, "
-                    "and access code, and confirm LAN-only mode is enabled. "
+                    "Could not connect to the printer. Verify its IP address and credentials, "
+                    "and confirm the configured LAN API is enabled. "
                     "The printer was not added."
                 ),
             },
         )
 
-    printer = Printer(**printer_data.model_dump())
+    values = printer_data.model_dump()
+    if printer_data.connection_type == "snapmaker_moonraker":
+        values["model"] = "Snapmaker U1"
+        values["nozzle_count"] = 4
+        camera = test_result.get("camera") or {}
+        if camera.get("stream_url") and not values.get("external_camera_url"):
+            values["external_camera_url"] = camera["stream_url"]
+            values["external_camera_type"] = "mjpeg"
+            values["external_camera_enabled"] = True
+        if camera.get("snapshot_url") and not values.get("external_camera_snapshot_url"):
+            values["external_camera_snapshot_url"] = camera["snapshot_url"]
+
+    printer = Printer(**values)
     db.add(printer)
     await db.commit()
     await db.refresh(printer)
@@ -235,6 +252,7 @@ async def get_available_filaments(
             ams_id = str(ams_unit.get("id", 0))
             extruder_id = ams_extruder_map.get(ams_id)
             for tray in ams_unit.get("tray", []):
+                tray_extruder_id = tray.get("extruder_id", extruder_id)
                 tray_type = tray.get("tray_type")
                 if not tray_type:
                     continue
@@ -250,7 +268,7 @@ async def get_available_filaments(
                 tray_info_idx = tray.get("tray_info_idx", "")
                 tray_sub_brands = tray.get("tray_sub_brands", "") or ""
 
-                key = (tray_type.upper(), rgb, tray_sub_brands.upper(), extruder_id)
+                key = (tray_type.upper(), rgb, tray_sub_brands.upper(), tray_extruder_id)
                 if key not in seen:
                     seen.add(key)
                     filaments.append(
@@ -259,7 +277,7 @@ async def get_available_filaments(
                             "color": color,
                             "tray_info_idx": tray_info_idx,
                             "tray_sub_brands": tray_sub_brands,
-                            "extruder_id": extruder_id,
+                            "extruder_id": tray_extruder_id,
                         }
                     )
 
@@ -374,7 +392,7 @@ async def update_printer(
     await db.refresh(printer)
 
     # Reconnect if connection settings changed
-    if any(k in update_data for k in ["ip_address", "access_code", "is_active"]):
+    if any(k in update_data for k in ["ip_address", "access_code", "connection_type", "connection_port", "is_active"]):
         printer_manager.disconnect_printer(printer_id)
         if printer.is_active:
             await printer_manager.connect_printer(printer)
@@ -537,6 +555,7 @@ async def get_printer_status(
                         tray_uuid=tray_uuid,
                         nozzle_temp_min=tray_data.get("nozzle_temp_min"),
                         nozzle_temp_max=tray_data.get("nozzle_temp_max"),
+                        extruder_id=tray_data.get("extruder_id"),
                         drying_temp=tray_data.get("drying_temp"),
                         drying_time=tray_data.get("drying_time"),
                         state=tray_data.get("state"),
@@ -962,7 +981,9 @@ async def disconnect_printer(
 async def test_printer_connection(
     ip_address: str,
     serial_number: str,
-    access_code: str,
+    access_code: str = "",
+    connection_type: str = "bambu",
+    connection_port: int = 7125,
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CREATE),
 ):
     """Test connection to a printer without saving."""
@@ -970,6 +991,8 @@ async def test_printer_connection(
         ip_address=ip_address,
         serial_number=serial_number,
         access_code=access_code,
+        connection_type=connection_type,
+        connection_port=connection_port,
     )
     return result
 
