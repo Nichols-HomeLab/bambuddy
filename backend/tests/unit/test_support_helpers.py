@@ -952,10 +952,13 @@ class TestCollectSlicerApiInfo:
         assert info["preferred"] == "bambu_studio"
         assert info["bambu_studio_url_set_in_db"] is False
         assert info["orcaslicer_url_set_in_db"] is False
+        assert info["snapmaker_orca_url_set_in_db"] is False
         assert "bambu_studio_reachable" not in info
         assert "orcaslicer_reachable" not in info
         assert "bambu_studio_version" not in info
         assert "orcaslicer_version" not in info
+        assert "snapmaker_orca_reachable" not in info
+        assert "snapmaker_orca_version" not in info
 
     @pytest.mark.asyncio
     async def test_enabled_runs_reachability_check_for_both_urls(self):
@@ -972,6 +975,7 @@ class TestCollectSlicerApiInfo:
                 "preferred_slicer": "orcaslicer",
                 "bambu_studio_api_url": "http://bs:3001",
                 "orcaslicer_api_url": "http://orca:3003",
+                "snapmaker_orca_api_url": "http://snapmaker:3003",
             }
         )
         with (
@@ -983,12 +987,15 @@ class TestCollectSlicerApiInfo:
         assert info["enabled"] is True
         assert info["bambu_studio_url_set_in_db"] is True
         assert info["orcaslicer_url_set_in_db"] is True
+        assert info["snapmaker_orca_url_set_in_db"] is True
         assert info["bambu_studio_url_source"] == "db"
         assert info["orcaslicer_url_source"] == "db"
+        assert info["snapmaker_orca_url_source"] == "db"
         assert info["bambu_studio_reachable"] is False
         assert info["orcaslicer_reachable"] is True
         assert info["bambu_studio_version"] is None
         assert info["orcaslicer_version"] == "2.3.2"
+        assert info["snapmaker_orca_reachable"] is False
 
     @pytest.mark.asyncio
     async def test_env_var_fallback_url_pinged_when_db_setting_empty(self):
@@ -1020,6 +1027,7 @@ class TestCollectSlicerApiInfo:
             # env var — we mock the resolved value directly.
             mock_app_settings.bambu_studio_api_url = "http://my-sidecar:3001"
             mock_app_settings.slicer_api_url = "http://localhost:3003"
+            mock_app_settings.snapmaker_orca_api_url = "http://snapmaker:3003"
 
             info = await _collect_slicer_api_info()
 
@@ -1050,6 +1058,7 @@ class TestCollectSlicerApiInfo:
                 "use_slicer_api": "true",
                 "bambu_studio_api_url": "http://real-bs-host:3001",
                 "orcaslicer_api_url": "http://real-orca-host:3003",
+                "snapmaker_orca_api_url": "http://real-snapmaker-host:3003",
             }
         )
         with (
@@ -1060,6 +1069,7 @@ class TestCollectSlicerApiInfo:
 
         assert "http://real-bs-host:3001" in seen_urls
         assert "http://real-orca-host:3003" in seen_urls
+        assert "http://real-snapmaker-host:3003" in seen_urls
         assert "[REDACTED]" not in seen_urls
 
 

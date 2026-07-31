@@ -251,8 +251,8 @@ class AppSettings(BaseModel):
 
     # Slicer-API sidecar base URLs. Per-installation, configured via the
     # Settings UI (the "Slicer" card). Empty string means "fall back to the
-    # SLICER_API_URL / BAMBU_STUDIO_API_URL env vars" — which themselves
-    # default to the docker-compose ports in core/config.py.
+    # SLICER_API_URL / BAMBU_STUDIO_API_URL / SNAPMAKER_ORCA_API_URL env vars"
+    # — which themselves default to the docker-compose ports in core/config.py.
     orcaslicer_api_url: str = Field(
         default="",
         description="OrcaSlicer sidecar URL (e.g. http://localhost:3003). Empty falls back to the SLICER_API_URL env var.",
@@ -260,6 +260,13 @@ class AppSettings(BaseModel):
     bambu_studio_api_url: str = Field(
         default="",
         description="BambuStudio sidecar URL (e.g. http://localhost:3001). Empty falls back to the BAMBU_STUDIO_API_URL env var.",
+    )
+    snapmaker_orca_api_url: str = Field(
+        default="",
+        description=(
+            "Dedicated Snapmaker Orca sidecar URL for U1 profiles (e.g. http://localhost:3003). "
+            "Empty falls back to SNAPMAKER_ORCA_API_URL."
+        ),
     )
 
     # Prometheus metrics endpoint
@@ -551,6 +558,7 @@ class AppSettingsUpdate(BaseModel):
     use_slicer_api: bool | None = None
     orcaslicer_api_url: str | None = None
     bambu_studio_api_url: str | None = None
+    snapmaker_orca_api_url: str | None = None
     prometheus_enabled: bool | None = None
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)

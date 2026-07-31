@@ -3511,7 +3511,6 @@ async def _run_slicer_with_fallback(
     time. Pass None for synchronous routes that aren't tracked by the
     dispatcher.
     """
-    from backend.app.api.routes.settings import get_setting
     from backend.app.services.preset_resolver import resolve_preset_ref
     from backend.app.services.slicer_api import (
         SlicerApiServerError,
@@ -3519,6 +3518,7 @@ async def _run_slicer_with_fallback(
         SlicerApiUnavailableError,
         SlicerInputError,
     )
+    from backend.app.services.slicer_routing import is_snapmaker_u1_profile, resolve_sidecar_url_for_profile
 
     user: User | None = None
     presets: dict[str, str] = {}
@@ -3553,21 +3553,20 @@ async def _run_slicer_with_fallback(
     if request.bed_type:
         presets["process"] = _patch_process_bed_type(presets["process"], request.bed_type)
 
-    # Slicer routing — pick the sidecar URL by preferred_slicer.
-    # The per-install URL setting (Settings UI → Slicer card) wins; an
-    # empty value falls back to the SLICER_API_URL / BAMBU_STUDIO_API_URL
-    # env defaults defined in core/config.py.
-    preferred = (await get_setting(db, "preferred_slicer")) or "bambu_studio"
-    if preferred == "orcaslicer":
-        configured = await get_setting(db, "orcaslicer_api_url")
-        api_url = (configured or app_settings.slicer_api_url).strip()
-    elif preferred == "bambu_studio":
-        configured = await get_setting(db, "bambu_studio_api_url")
-        api_url = (configured or app_settings.bambu_studio_api_url).strip()
-    else:
+    # Snapmaker U1 profiles always use the dedicated Snapmaker Orca sidecar.
+    # Every other profile retains the existing preferred_slicer routing, so
+    # Bambu farms can keep BambuStudio or generic Orca as their default.
+    api_url = await resolve_sidecar_url_for_profile(db, presets["printer"])
+    if not api_url:
+        if not is_snapmaker_u1_profile(presets["printer"]):
+            from backend.app.api.routes.settings import get_setting
+
+            preferred = (await get_setting(db, "preferred_slicer")) or "bambu_studio"
+            if preferred not in {"bambu_studio", "orcaslicer"}:
+                raise HTTPException(status_code=400, detail=f"Unsupported preferred_slicer: {preferred}")
         raise HTTPException(
-            status_code=400,
-            detail=f"Unknown preferred_slicer setting: '{preferred}'. Expected 'orcaslicer' or 'bambu_studio'.",
+            status_code=503,
+            detail="No slicer sidecar is configured for the selected printer profile.",
         )
 
     # Note: an earlier version of this code stripped Metadata/project_settings.

@@ -106,12 +106,14 @@ class Settings(BaseSettings):
 
     # Slicer API sidecars. Defaults match the docker-compose.yml ports in the
     # orca-slicer-api fork (https://github.com/maziggy/orca-slicer-api):
-    #   OrcaSlicer  → port 3003 (default profile)
-    #   BambuStudio → port 3001 (built locally via Dockerfile.bambu-studio)
-    # The slice route picks which one based on the user's preferred_slicer
-    # setting.
+    #   Generic OrcaSlicer → port 3003 (legacy/default preference)
+    #   BambuStudio        → port 3001
+    #   Snapmaker Orca     → port 3003 (dedicated U1 route)
+    # The selected printer profile routes U1 jobs to Snapmaker Orca; all other
+    # jobs continue using the user's preferred_slicer setting.
     slicer_api_url: str = "http://localhost:3003"
     bambu_studio_api_url: str = "http://localhost:3001"
+    snapmaker_orca_api_url: str = "http://localhost:3003"
 
     class Config:
         env_file = ".env"

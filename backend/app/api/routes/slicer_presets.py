@@ -11,6 +11,7 @@ without faking an "ok with empty list" response.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -27,7 +28,6 @@ from backend.app.api.routes.orca_cloud import (
     _load_credentials as _load_orca_credentials,
 )
 from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_ownership_permission
-from backend.app.core.config import settings as app_settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.local_preset import LocalPreset
@@ -376,37 +376,43 @@ async def _fetch_bundled_presets(db: AsyncSession, *, refresh: bool = False) -> 
     if not refresh and _bundled_cache and now - _bundled_cache[0] < _BUNDLED_TTL_S:
         return _bundled_cache[1]
 
-    api_url = await _resolve_slicer_api_url(db)
-    if not api_url:
+    api_urls = await _resolve_slicer_api_urls(db)
+    if not api_urls:
         # No sidecar configured at all — return empty rather than caching, so
         # users who configure one mid-session see results on next open.
         return _empty_slots()
 
-    try:
-        async with SlicerApiService(base_url=api_url) as svc:
-            raw = await svc.list_bundled_profiles()
-    except SlicerApiError as e:
-        logger.info("Bundled preset fetch from sidecar at %s failed: %s", api_url, e)
-        return _empty_slots()
-    except Exception as e:  # noqa: BLE001 — never break the modal on sidecar issues
-        logger.warning("Bundled preset fetch unexpected error: %s", e)
-        return _empty_slots()
-
     slots = _empty_slots()
-    for slot in ("printer", "process", "filament"):
-        for entry in raw.get(slot, []) or []:
-            name = entry.get("name")
-            if not name:
-                continue
-            # Bundled presets are addressed by name (the slicer resolves them
-            # by name during the `inherits:` walk), so name doubles as id.
-            extra: dict[str, str | None] = {}
-            if slot == "filament":
-                extra["filament_type"] = entry.get("filament_type")
-                extra["filament_colour"] = entry.get("filament_colour")
-            slots[slot].append(
-                UnifiedPreset(id=name, name=name, source="standard", **extra),
-            )
+    seen: dict[str, set[str]] = {slot: set() for slot in slots}
+    for api_url in api_urls:
+        try:
+            async with SlicerApiService(base_url=api_url) as svc:
+                raw = await svc.list_bundled_profiles()
+        except SlicerApiError as e:
+            logger.info("Bundled preset fetch from sidecar at %s failed: %s", api_url, e)
+            continue
+        except Exception as e:  # noqa: BLE001 — never break the modal on sidecar issues
+            logger.warning("Bundled preset fetch from %s failed unexpectedly: %s", api_url, e)
+            continue
+
+        for slot in ("printer", "process", "filament"):
+            for entry in raw.get(slot, []) or []:
+                name = entry.get("name")
+                if not name or name.casefold() in seen[slot]:
+                    continue
+                seen[slot].add(name.casefold())
+                # Bundled presets are addressed by name; the selected printer
+                # profile later chooses which sidecar resolves that name.
+                extra: dict[str, str | None] = {}
+                if slot == "filament":
+                    extra["filament_type"] = entry.get("filament_type")
+                    extra["filament_colour"] = entry.get("filament_colour")
+                slots[slot].append(
+                    UnifiedPreset(id=name, name=name, source="standard", **extra),
+                )
+
+    for values in slots.values():
+        values.sort(key=lambda item: item.name.casefold())
 
     _bundled_cache = (now, slots)
     return slots
@@ -424,22 +430,16 @@ async def _resolve_slicer_api_url(db: AsyncSession) -> str | None:
     hit OrcaSlicer (port 3003) even for BambuStudio installs (port 3001),
     leaving the Standard tier permanently empty for them.
     """
-    from backend.app.api.routes.settings import get_setting
+    from backend.app.services.slicer_routing import resolve_preferred_sidecar_url
 
-    preferred = (await get_setting(db, "preferred_slicer")) or "bambu_studio"
-    if preferred == "orcaslicer":
-        configured = await get_setting(db, "orcaslicer_api_url")
-        url = (configured or app_settings.slicer_api_url).strip()
-    elif preferred == "bambu_studio":
-        configured = await get_setting(db, "bambu_studio_api_url")
-        url = (configured or app_settings.bambu_studio_api_url).strip()
-    else:
-        # Unknown preference — return None so the bundled tier is empty
-        # rather than crashing the modal. The slice route raises 400 here;
-        # we degrade silently because the modal's listing is informational.
-        logger.warning("Unknown preferred_slicer setting: %r — bundled tier disabled", preferred)
-        return None
-    return url or None
+    return await resolve_preferred_sidecar_url(db)
+
+
+async def _resolve_slicer_api_urls(db: AsyncSession) -> list[str]:
+    """Resolve both the preferred/Bambu and dedicated Snapmaker sidecars."""
+    from backend.app.services.slicer_routing import resolve_all_sidecar_urls
+
+    return await resolve_all_sidecar_urls(db)
 
 
 def _enrich_cloud_metadata(
@@ -613,17 +613,22 @@ async def get_preview_slice_progress(
     """
     import httpx
 
-    api_url = await _resolve_slicer_api_url(db)
-    if not api_url:
+    api_urls = await _resolve_slicer_api_urls(db)
+    if not api_urls:
         raise HTTPException(status_code=503, detail="No slicer sidecar configured")
-    url = f"{api_url}/slice/progress/{request_id}"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(url)
+            responses = await asyncio.gather(
+                *(client.get(f"{api_url}/slice/progress/{request_id}") for api_url in api_urls),
+                return_exceptions=True,
+            )
     except httpx.RequestError:
         # Sidecar unreachable: surface as 503 instead of 500 so the
         # frontend's poller can keep trying without flagging a hard error.
         raise HTTPException(status_code=503, detail="Slicer sidecar unreachable") from None
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail="Progress unavailable")
-    return response.json()
+    for response in responses:
+        if isinstance(response, httpx.Response) and response.status_code == 200:
+            return response.json()
+    if responses and all(isinstance(response, httpx.RequestError) for response in responses):
+        raise HTTPException(status_code=503, detail="Slicer sidecars unreachable")
+    raise HTTPException(status_code=404, detail="Progress unavailable")

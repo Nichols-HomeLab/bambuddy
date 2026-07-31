@@ -46,3 +46,14 @@ class TestPreferredSlicerSchema:
         update = AppSettingsUpdate(preferred_slicer="orcaslicer")
         data = update.model_dump(exclude_none=True)
         assert data == {"preferred_slicer": "orcaslicer"}
+
+    def test_snapmaker_sidecar_url_defaults_empty(self):
+        settings = AppSettings()
+        update = AppSettingsUpdate()
+        assert settings.snapmaker_orca_api_url == ""
+        assert update.snapmaker_orca_api_url is None
+
+    def test_snapmaker_sidecar_url_roundtrip(self):
+        url = "http://snapmaker-orca-api:3000"
+        settings = AppSettings(snapmaker_orca_api_url=url)
+        assert AppSettings(**settings.model_dump()).snapmaker_orca_api_url == url

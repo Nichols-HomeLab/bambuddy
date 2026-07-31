@@ -237,6 +237,50 @@ class TestSliceLibraryFile:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_snapmaker_u1_profile_routes_to_dedicated_sidecar(
+        self,
+        async_client: AsyncClient,
+        db_session,
+        slice_test_setup,
+    ):
+        await db_session.execute(
+            LocalPreset.__table__.update()
+            .where(LocalPreset.id == slice_test_setup["printer_id"])
+            .values(setting=json.dumps({"name": "Snapmaker U1 (0.4 nozzle)", "type": "printer"}))
+        )
+        db_session.add(SettingsModel(key="snapmaker_orca_api_url", value="http://snapmaker-sidecar:3000"))
+        await db_session.commit()
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(
+                status_code=200,
+                content=_make_3mf_with_settings(),
+                headers={
+                    "x-print-time-seconds": "10",
+                    "x-filament-used-g": "0.1",
+                    "x-filament-used-mm": "1.0",
+                },
+            )
+
+        _install_mock_sidecar(handler)
+        response = await async_client.post(
+            f"/api/v1/library/files/{slice_test_setup['src_file_id']}/slice",
+            json={
+                "printer_preset_id": slice_test_setup["printer_id"],
+                "process_preset_id": slice_test_setup["process_id"],
+                "filament_preset_id": slice_test_setup["filament_id"],
+            },
+        )
+        assert response.status_code == 202
+        final = await _wait_for_job(async_client, response.json()["job_id"])
+        assert final["status"] == "completed", final
+        assert captured["url"] == "http://snapmaker-sidecar:3000/slice"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_bed_type_override_patches_process_profile(self, async_client: AsyncClient, slice_test_setup):
         """#1337: when SliceRequest.bed_type is set, the process JSON sent to
         the sidecar must carry curr_bed_type with that exact value. Without

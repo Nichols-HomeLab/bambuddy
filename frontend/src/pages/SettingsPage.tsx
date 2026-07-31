@@ -1008,6 +1008,7 @@ export function SettingsPage() {
       (settings.use_slicer_api ?? false) !== (localSettings.use_slicer_api ?? false) ||
       (settings.orcaslicer_api_url ?? '') !== (localSettings.orcaslicer_api_url ?? '') ||
       (settings.bambu_studio_api_url ?? '') !== (localSettings.bambu_studio_api_url ?? '') ||
+      (settings.snapmaker_orca_api_url ?? '') !== (localSettings.snapmaker_orca_api_url ?? '') ||
       settings.prometheus_enabled !== localSettings.prometheus_enabled ||
       settings.prometheus_token !== localSettings.prometheus_token ||
       (settings.user_notifications_enabled ?? true) !== (localSettings.user_notifications_enabled ?? true) ||
@@ -1107,6 +1108,7 @@ export function SettingsPage() {
         use_slicer_api: localSettings.use_slicer_api,
         orcaslicer_api_url: localSettings.orcaslicer_api_url,
         bambu_studio_api_url: localSettings.bambu_studio_api_url,
+        snapmaker_orca_api_url: localSettings.snapmaker_orca_api_url,
         prometheus_enabled: localSettings.prometheus_enabled,
         prometheus_token: localSettings.prometheus_token,
         user_notifications_enabled: localSettings.user_notifications_enabled,
@@ -4799,40 +4801,60 @@ export function SettingsPage() {
                 </label>
               </div>
               {(localSettings.use_slicer_api ?? false) && (
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">
-                    {(localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
-                      ? t('settings.orcaslicerApiUrl', 'OrcaSlicer sidecar URL')
-                      : t('settings.bambuStudioApiUrl', 'Bambu Studio sidecar URL')}
-                  </label>
-                  <input
-                    type="text"
-                    value={
-                      ((localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
-                        ? localSettings.orcaslicer_api_url
-                        : localSettings.bambu_studio_api_url) ?? ''
-                    }
-                    onChange={(e) =>
-                      updateSetting(
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">
+                      {(localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
+                        ? t('settings.orcaslicerApiUrl', 'OrcaSlicer sidecar URL')
+                        : t('settings.bambuStudioApiUrl', 'Bambu Studio sidecar URL')}
+                    </label>
+                    <input
+                      type="text"
+                      value={
+                        ((localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
+                          ? localSettings.orcaslicer_api_url
+                          : localSettings.bambu_studio_api_url) ?? ''
+                      }
+                      onChange={(e) =>
+                        updateSetting(
+                          (localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
+                            ? 'orcaslicer_api_url'
+                            : 'bambu_studio_api_url',
+                          e.target.value,
+                        )
+                      }
+                      placeholder={
                         (localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
-                          ? 'orcaslicer_api_url'
-                          : 'bambu_studio_api_url',
-                        e.target.value,
-                      )
-                    }
-                    placeholder={
-                      (localSettings.preferred_slicer ?? 'bambu_studio') === 'orcaslicer'
-                        ? 'http://localhost:3003'
-                        : 'http://localhost:3001'
-                    }
-                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none placeholder:text-bambu-gray/40"
-                  />
-                  <p className="text-xs text-bambu-gray mt-1">
-                    {t(
-                      'settings.slicerApiUrlDescription',
-                      'URL of the slicer-API sidecar container. Leave blank to use the SLICER_API_URL / BAMBU_STUDIO_API_URL env var defaults.',
-                    )}
-                  </p>
+                          ? 'http://localhost:3003'
+                          : 'http://localhost:3001'
+                      }
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none placeholder:text-bambu-gray/40"
+                    />
+                    <p className="text-xs text-bambu-gray mt-1">
+                      {t(
+                        'settings.slicerApiUrlDescription',
+                        'URL of the slicer-API sidecar container. Leave blank to use the SLICER_API_URL / BAMBU_STUDIO_API_URL env var defaults.',
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">
+                      {t('settings.snapmakerOrcaApiUrl', 'Snapmaker U1 Orca sidecar URL')}
+                    </label>
+                    <input
+                      type="text"
+                      value={localSettings.snapmaker_orca_api_url ?? ''}
+                      onChange={(e) => updateSetting('snapmaker_orca_api_url', e.target.value)}
+                      placeholder="http://localhost:3003"
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none placeholder:text-bambu-gray/40"
+                    />
+                    <p className="text-xs text-bambu-gray mt-1">
+                      {t(
+                        'settings.snapmakerOrcaApiUrlDescription',
+                        'U1 printer profiles are routed here automatically. Leave blank to use SNAPMAKER_ORCA_API_URL.',
+                      )}
+                    </p>
+                  </div>
                 </div>
               )}
             </CardContent>

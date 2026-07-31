@@ -14,8 +14,7 @@
 #
 # Usage:
 #   cd slicer-api/
-#   docker compose up -d                       # starts OrcaSlicer only
-#   docker compose --profile bambu up -d       # starts both
+#   docker compose up -d                       # starts both sidecars
 #
 # First start pulls pre-built images from GHCR (~110 MB OrcaSlicer,
 # ~220 MB BambuStudio). No local build, no git in the BuildKit worker,
@@ -62,5 +61,3 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
-    profiles:
-      - bambu

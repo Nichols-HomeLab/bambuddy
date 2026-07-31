@@ -38,6 +38,7 @@ _SENSITIVE_KEYS = {
     "external_url",
     "bambu_studio_api_url",
     "orcaslicer_api_url",
+    "snapmaker_orca_api_url",
     "local_backup_path",
     "github_token",
     "gitea_token",

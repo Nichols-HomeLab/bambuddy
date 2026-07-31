@@ -590,9 +590,9 @@ async def _collect_slicer_api_info() -> dict:
 
     Mirrors the URL-resolution precedence used by the real slicer routes
     (``archives.py:_slice_for_archive`` and ``library.py``) — DB setting first,
-    falling back to ``app_settings.bambu_studio_api_url`` / ``slicer_api_url``
-    which themselves respect the ``BAMBU_STUDIO_API_URL`` / ``SLICER_API_URL``
-    env vars and default to ``http://localhost:3001`` / ``http://localhost:3003``.
+    falling back to ``app_settings.bambu_studio_api_url`` / ``slicer_api_url`` /
+    ``snapmaker_orca_api_url``, which themselves respect their matching env
+    vars and defaults.
     A bundle-time reachability check that only looked at the DB setting would
     return ``null`` for every user who runs the sidecar via env var or on the
     default port — i.e. most users.
@@ -609,6 +609,7 @@ async def _collect_slicer_api_info() -> dict:
             "preferred_slicer",
             "bambu_studio_api_url",
             "orcaslicer_api_url",
+            "snapmaker_orca_api_url",
         )
         rows = (await db.execute(select(Settings).where(Settings.key.in_(keys_we_need)))).scalars().all()
         raw = {s.key: (s.value or "") for s in rows}
@@ -618,8 +619,10 @@ async def _collect_slicer_api_info() -> dict:
     # the running app would resolve at request time.
     bs_db = raw.get("bambu_studio_api_url", "").strip()
     oc_db = raw.get("orcaslicer_api_url", "").strip()
+    sm_db = raw.get("snapmaker_orca_api_url", "").strip()
     bs_url = bs_db or (settings.bambu_studio_api_url or "").strip()
     oc_url = oc_db or (settings.slicer_api_url or "").strip()
+    sm_url = sm_db or (settings.snapmaker_orca_api_url or "").strip()
 
     info: dict = {
         "enabled": (raw.get("use_slicer_api", "false") or "false").lower() == "true",
@@ -629,21 +632,26 @@ async def _collect_slicer_api_info() -> dict:
         # DB setting" is the env-var case.
         "bambu_studio_url_set_in_db": bool(bs_db),
         "orcaslicer_url_set_in_db": bool(oc_db),
+        "snapmaker_orca_url_set_in_db": bool(sm_db),
         # Effective URL is the resolved one — kept as a host-portion-only
         # echo so we can confirm it's the expected sidecar without leaking
         # the full URL (which `url` keyword would have redacted anyway).
         "bambu_studio_url_source": ("db" if bs_db else ("env_or_default" if bs_url else "unset")),
         "orcaslicer_url_source": ("db" if oc_db else ("env_or_default" if oc_url else "unset")),
+        "snapmaker_orca_url_source": ("db" if sm_db else ("env_or_default" if sm_url else "unset")),
     }
     if info["enabled"]:
-        bs_health, oc_health = await asyncio.gather(
+        bs_health, oc_health, sm_health = await asyncio.gather(
             _fetch_slicer_health(bs_url),
             _fetch_slicer_health(oc_url),
+            _fetch_slicer_health(sm_url),
         )
         info["bambu_studio_reachable"] = (bs_health or {}).get("reachable") if bs_health is not None else None
         info["bambu_studio_version"] = (bs_health or {}).get("version") if bs_health is not None else None
         info["orcaslicer_reachable"] = (oc_health or {}).get("reachable") if oc_health is not None else None
         info["orcaslicer_version"] = (oc_health or {}).get("version") if oc_health is not None else None
+        info["snapmaker_orca_reachable"] = (sm_health or {}).get("reachable") if sm_health is not None else None
+        info["snapmaker_orca_version"] = (sm_health or {}).get("version") if sm_health is not None else None
     return info
 
 

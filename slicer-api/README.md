@@ -7,9 +7,11 @@ source lives in both
 [Gitea](https://git.nicholstech.org/Nichols-HomeLab/orca-slicer-api) and
 [GitHub](https://github.com/Nichols-HomeLab/orca-slicer-api).
 
-Set Bambuddy's **Slicer sidecar URL** to
+Set Bambuddy's **Snapmaker U1 Orca sidecar URL** to
 `http://snapmaker-orca-api:3000` on a shared Docker network, or to
-`http://<sidecar-host>:3003` when accessing the published host port.
+`http://<sidecar-host>:3003` when accessing the published host port. Bambuddy
+routes U1 profiles to this URL while retaining the preferred Bambu/Orca
+sidecar for other printer profiles.
 
 Self-contained Docker Compose stack that runs HTTP wrappers around the
 OrcaSlicer and/or Bambu Studio CLI. Bambuddy's **Slice** action calls
@@ -19,9 +21,10 @@ This folder is **optional**. Bambuddy works without it — Slice falls back
 to opening the model in the user's local desktop slicer via URI scheme.
 Enable the API path by:
 
-1. Starting one or both services here
+1. Starting the services here
 2. **Settings → Slicer → Use Slicer API** = on
-3. Set **Slicer sidecar URL** for whichever slicer you've started
+3. Set both the preferred **Slicer sidecar URL** and the dedicated
+   **Snapmaker U1 Orca sidecar URL**
 
 ## Quick start
 
@@ -29,14 +32,10 @@ Enable the API path by:
 cd slicer-api/
 cp .env.example .env       # edit ports if you like
 
-# OrcaSlicer only (default profile):
+# Start both Bambu Studio and Snapmaker Orca sidecars:
 docker compose up -d
-curl http://localhost:3003/health
-
-# Both slicers:
-docker compose --profile bambu up -d
 curl http://localhost:3001/health   # bambu-studio-api
-curl http://localhost:3003/health   # orca-slicer-api
+curl http://localhost:3003/health   # snapmaker-orca-api
 ```
 
 First start pulls pre-built images from GHCR (~110 MB OrcaSlicer,
@@ -53,7 +52,7 @@ the sidecar on a separate x86_64 box and point Bambuddy at it via the
 
 | Service | Default host port | Why this port |
 |---|---|---|
-| `orca-slicer-api` | **3003** | Bambuddy's virtual-printer feature reserves 3000 and 3002 |
+| `snapmaker-orca-api` | **3003** | Bambuddy's virtual-printer feature reserves 3000 and 3002 |
 | `bambu-studio-api` | **3001** | First free port in that range |
 
 Override via `ORCA_API_PORT` / `BAMBU_API_PORT` in `.env`.
@@ -64,13 +63,17 @@ In the Bambuddy UI: **Settings → Slicer**:
 
 - **Preferred Slicer**: pick OrcaSlicer or Bambu Studio.
 - **Use Slicer API**: turn on.
-- **Sidecar URL**: paste the full URL of the chosen slicer's sidecar.
+- **Sidecar URL**: paste the full URL of the preferred slicer's sidecar.
   Default values match the Compose defaults:
   - OrcaSlicer: `http://localhost:3003`
   - Bambu Studio: `http://localhost:3001`
+- **Snapmaker U1 Orca sidecar URL**: set `http://localhost:3003` (or the
+  `snapmaker-orca-api` container URL on a shared network). U1 profiles are
+  selected automatically; no preference toggle is required.
 
-Leaving the URL field blank uses the `SLICER_API_URL` /
-`BAMBU_STUDIO_API_URL` environment defaults from Bambuddy's config.
+Leaving a URL field blank uses the `SLICER_API_URL`,
+`BAMBU_STUDIO_API_URL`, or `SNAPMAKER_ORCA_API_URL` environment default from
+Bambuddy's config.
 
 ## Where the images live
 
@@ -97,7 +100,7 @@ flipped back to `ghcr.io/afkfelix/orca-slicer-api`.
 
 ```bash
 docker compose pull
-docker compose --profile bambu up -d
+docker compose up -d
 ```
 
 That's it — Compose pulls the current `:latest` (or whatever

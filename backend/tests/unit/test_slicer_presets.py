@@ -677,7 +677,7 @@ class TestFetchBundledPresets:
     @pytest.mark.asyncio
     async def test_no_sidecar_url_returns_empty(self):
         sp._bundled_cache = None
-        with patch.object(sp, "_resolve_slicer_api_url", AsyncMock(return_value=None)):
+        with patch.object(sp, "_resolve_slicer_api_urls", AsyncMock(return_value=[])):
             slots = await sp._fetch_bundled_presets(MagicMock())
         assert slots == {"printer": [], "process": [], "filament": []}
         # No URL means no useful cache result either — second call should
@@ -692,7 +692,7 @@ class TestFetchBundledPresets:
         svc_mock.__aenter__ = AsyncMock(return_value=svc_mock)
         svc_mock.__aexit__ = AsyncMock(return_value=False)
         with (
-            patch.object(sp, "_resolve_slicer_api_url", AsyncMock(return_value="http://nope")),
+            patch.object(sp, "_resolve_slicer_api_urls", AsyncMock(return_value=["http://nope"])),
             patch.object(sp, "SlicerApiService", return_value=svc_mock),
         ):
             slots = await sp._fetch_bundled_presets(MagicMock())
@@ -712,7 +712,7 @@ class TestFetchBundledPresets:
         svc_mock.__aenter__ = AsyncMock(return_value=svc_mock)
         svc_mock.__aexit__ = AsyncMock(return_value=False)
         with (
-            patch.object(sp, "_resolve_slicer_api_url", AsyncMock(return_value="http://ok")),
+            patch.object(sp, "_resolve_slicer_api_urls", AsyncMock(return_value=["http://ok"])),
             patch.object(sp, "SlicerApiService", return_value=svc_mock),
         ):
             slots = await sp._fetch_bundled_presets(MagicMock())
@@ -763,7 +763,7 @@ class TestFetchBundledPresets:
         svc_mock.__aenter__ = AsyncMock(return_value=svc_mock)
         svc_mock.__aexit__ = AsyncMock(return_value=False)
         with (
-            patch.object(sp, "_resolve_slicer_api_url", AsyncMock(return_value="http://ok")),
+            patch.object(sp, "_resolve_slicer_api_urls", AsyncMock(return_value=["http://ok"])),
             patch.object(sp, "SlicerApiService", return_value=svc_mock),
         ):
             slots = await sp._fetch_bundled_presets(MagicMock(), refresh=True)
@@ -773,6 +773,48 @@ class TestFetchBundledPresets:
         # subsequent normal (non-refresh) call doesn't re-hit the sidecar.
         assert sp._bundled_cache is not None
         assert [p.name for p in sp._bundled_cache[1]["printer"]] == ["Fresh"]
+
+    @pytest.mark.asyncio
+    async def test_merges_bambu_and_snapmaker_sidecars(self):
+        sp._bundled_cache = None
+        payloads = {
+            "http://bambu": {
+                "printer": [{"name": "Bambu Lab X1 Carbon 0.4 nozzle"}],
+                "process": [{"name": "0.20mm Standard"}],
+                "filament": [{"name": "Generic PLA", "filament_type": "PLA"}],
+            },
+            "http://snapmaker": {
+                "printer": [{"name": "Snapmaker U1 (0.4 nozzle)"}],
+                "process": [{"name": "0.20mm Standard @Snapmaker U1"}],
+                "filament": [
+                    {"name": "Generic PLA", "filament_type": "PLA"},
+                    {"name": "Snapmaker PLA @U1", "filament_type": "PLA"},
+                ],
+            },
+        }
+
+        def service_for(*, base_url):
+            svc = MagicMock()
+            svc.list_bundled_profiles = AsyncMock(return_value=payloads[base_url])
+            svc.__aenter__ = AsyncMock(return_value=svc)
+            svc.__aexit__ = AsyncMock(return_value=False)
+            return svc
+
+        with (
+            patch.object(
+                sp,
+                "_resolve_slicer_api_urls",
+                AsyncMock(return_value=["http://bambu", "http://snapmaker"]),
+            ),
+            patch.object(sp, "SlicerApiService", side_effect=service_for),
+        ):
+            slots = await sp._fetch_bundled_presets(MagicMock())
+
+        assert [p.name for p in slots["printer"]] == [
+            "Bambu Lab X1 Carbon 0.4 nozzle",
+            "Snapmaker U1 (0.4 nozzle)",
+        ]
+        assert [p.name for p in slots["filament"]] == ["Generic PLA", "Snapmaker PLA @U1"]
 
 
 class TestResolveSlicerApiUrl:
