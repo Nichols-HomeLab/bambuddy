@@ -1,0 +1,79 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "dependencyDashboard": true,
+  "labels": [
+    "dependencies"
+  ],
+  "timezone": "America/New_York",
+  "schedule": [
+    "after 2am and before 6am"
+  ],
+  "prConcurrentLimit": 5,
+  "branchConcurrentLimit": 8,
+  "rangeStrategy": "replace",
+  "automerge": false,
+  "ignoreTests": false,
+  "docker": {
+    "pinDigests": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the Snapmaker Orca sidecar image tag stored in a Compose default",
+      "managerFilePatterns": [
+        "/^slicer-api/docker-compose\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "git\\.nicholstech\\.org/nichols-homelab/snapmaker-orca-api:\\$\\{SNAPMAKER_ORCA_VERSION:-(?<currentValue>[^}]+)\\}"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "git.nicholstech.org/nichols-homelab/snapmaker-orca-api",
+      "versioningTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Group non-major container updates",
+      "matchManagers": [
+        "dockerfile",
+        "docker-compose",
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "patch",
+        "minor"
+      ],
+      "groupName": "container image updates",
+      "automerge": true,
+      "automergeType": "pr",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Never automatically merge major releases",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "Group Gitea Actions dependencies",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "CI action updates",
+      "automerge": false
+    },
+    {
+      "description": "Hold database upgrades for review",
+      "matchPackageNames": [
+        "postgres",
+        "timescale/timescaledb"
+      ],
+      "automerge": false
+    }
+  ]
+}

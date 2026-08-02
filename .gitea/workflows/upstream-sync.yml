@@ -1,0 +1,108 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone custom repository
+        env:
+          GITEA_REPOSITORY: ${{ github.repository }}
+          GITEA_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          GITEA_URL: ${{ github.server_url }}
+        run: |
+          set -eu
+
+          git -c http.extraHeader="Authorization: token ${GITEA_TOKEN}" \
+            clone "${GITEA_URL}/${GITEA_REPOSITORY}.git" repo
+          git -C repo config \
+            "http.${GITEA_URL}/.extraHeader" \
+            "Authorization: token ${GITEA_TOKEN}"
+
+      - name: Update clean upstream mirror
+        working-directory: repo
+        env:
+          UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH }}
+          UPSTREAM_URL: ${{ vars.UPSTREAM_URL }}
+        run: |
+          set -eu
+
+          git config user.name "Upstream Sync Bot"
+          git config user.email "upstream-sync@nicholstech.org"
+          git remote add source-upstream "${UPSTREAM_URL}"
+          git fetch --prune source-upstream "${UPSTREAM_BRANCH}"
+          git checkout -B upstream "source-upstream/${UPSTREAM_BRANCH}"
+          git push origin upstream --force-with-lease
+
+      - name: Prepare reviewable merge
+        working-directory: repo
+        env:
+          UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH }}
+        run: |
+          set -eu
+
+          git fetch origin main upstream
+          git checkout -B upstream-sync origin/main
+
+          if git merge --no-edit --no-ff origin/upstream; then
+            if git diff --quiet origin/main...HEAD; then
+              echo "No upstream changes to merge."
+              exit 0
+            fi
+          else
+            echo "Upstream merge has conflicts; origin/upstream is still current."
+            git merge --abort
+            exit 1
+          fi
+
+          git commit --amend -m "chore: merge upstream ${UPSTREAM_BRANCH}"
+          git push origin upstream-sync --force-with-lease
+
+      - name: Create pull request and enable checked auto-merge
+        working-directory: repo
+        env:
+          GITEA_REPOSITORY: ${{ github.repository }}
+          GITEA_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          GITEA_URL: ${{ github.server_url }}
+        run: |
+          set -eu
+
+          if git diff --quiet origin/main...upstream-sync; then
+            exit 0
+          fi
+
+          api="${GITEA_URL%/}/api/v1"
+          owner="${GITEA_REPOSITORY%/*}"
+          repository="${GITEA_REPOSITORY#*/}"
+          pulls="$(curl -fsS \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            "${api}/repos/${owner}/${repository}/pulls?state=open&base_branch=main&limit=50")"
+          number="$(printf '%s' "${pulls}" | jq -r \
+            '[.[] | select(.head.ref == "upstream-sync")][0].number // empty')"
+
+          if [ -z "${number}" ]; then
+            number="$(jq -n \
+              --arg base main \
+              --arg head upstream-sync \
+              --arg title "chore: merge upstream" \
+              --arg body "Automated upstream merge. CI must pass before this Bambuddy update is merged." \
+              '{base: $base, head: $head, title: $title, body: $body}' | \
+              curl -fsS -X POST \
+                -H "Authorization: token ${GITEA_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data-binary @- \
+                "${api}/repos/${owner}/${repository}/pulls" | jq -r .number)"
+          fi
+
+          jq -n \
+            '{do: "merge", merge_when_checks_succeed: true, delete_branch_after_merge: false}' | \
+            curl -fsS -X POST \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data-binary @- \
+              "${api}/repos/${owner}/${repository}/pulls/${number}/merge"

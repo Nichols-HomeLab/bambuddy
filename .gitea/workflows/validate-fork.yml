@@ -1,0 +1,49 @@
+name: Validate custom fork
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  container-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Verify custom integration remains present
+        run: |
+          set -eu
+          git grep -q "snapmaker" -- backend frontend docs
+          test -f slicer-api/docker-compose.yml
+
+      - name: Build image
+        run: docker build -t bambuddy-custom:test .
+
+      - name: Start image and wait for health
+        run: |
+          set -eu
+          name="bambuddy-fork-test-${{ github.run_id }}"
+          trap 'docker rm -f "${name}" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "${name}" -e TESTING=1 bambuddy-custom:test
+
+          for _ in $(seq 1 36); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "${name}" 2>/dev/null || true)"
+            if [ "${status}" = healthy ]; then
+              sleep 30
+              test "$(docker inspect --format '{{.State.Health.Status}}' "${name}")" = healthy
+              exit 0
+            fi
+            if [ "${status}" = unhealthy ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          docker logs "${name}"
+          exit 1
