@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download,
+  Upload, Download, ScanLine,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -21,6 +21,7 @@ import { ColumnConfigModal, type ColumnConfig } from '../components/ColumnConfig
 import { LabelTemplatePickerModal } from '../components/LabelTemplatePickerModal';
 import { SpoolCsvImportModal } from '../components/SpoolCsvImportModal';
 import { LocationsModal } from '../components/LocationsModal';
+import { FilamentWorkflowModal } from '../components/FilamentWorkflowModal';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -79,6 +80,11 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'slicer_filament', label: 'Slicer Filament', visible: false },
   { id: 'location', label: 'Location', visible: true },
   { id: 'storage_location', label: 'Storage Location', visible: false },
+  { id: 'workflow_status', label: 'Status', visible: true },
+  { id: 'drying_status', label: 'Drying', visible: false },
+  { id: 'storage_humidity', label: 'Box Humidity', visible: false },
+  { id: 'loaded_at', label: 'Loaded At', visible: false },
+  { id: 'last_dried', label: 'Last Dried', visible: false },
   { id: 'label_weight', label: 'Label', visible: true },
   { id: 'net', label: 'Net', visible: true },
   { id: 'gross', label: 'Gross', visible: false },
@@ -188,6 +194,11 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   slicer_filament: (t) => t('inventory.slicerFilament'),
   location: () => 'Location',
   storage_location: (t) => t('inventory.storageLocation'),
+  workflow_status: () => 'Status',
+  drying_status: () => 'Drying',
+  storage_humidity: () => 'Box Humidity',
+  loaded_at: () => 'Loaded At',
+  last_dried: () => 'Last Dried',
   label_weight: (t) => t('inventory.labelWeight'),
   net: (t) => t('inventory.net'),
   gross: () => 'Gross',
@@ -270,6 +281,29 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       </span>
     );
   },
+  workflow_status: ({ spool }) => (
+    <span className={`inline-flex rounded px-1.5 py-0.5 text-xs font-medium ${
+      spool.inventory_status?.startsWith('loaded_')
+        ? 'bg-bambu-green/20 text-bambu-green'
+        : spool.inventory_status === 'drying' || spool.inventory_status === 'needs_drying'
+          ? 'bg-amber-500/20 text-amber-400'
+          : 'bg-bambu-dark-tertiary text-bambu-gray'
+    }`}>
+      {(spool.inventory_status || 'stored').replaceAll('_', ' ')}
+    </span>
+  ),
+  drying_status: ({ spool }) => (
+    <span className="text-sm capitalize text-bambu-gray">{(spool.drying_status || 'dry').replaceAll('_', ' ')}</span>
+  ),
+  storage_humidity: ({ spool }) => (
+    <span className="text-sm text-bambu-gray">{spool.storage_box_humidity == null ? '-' : `${spool.storage_box_humidity.toFixed(1)}%`}</span>
+  ),
+  loaded_at: ({ spool, dateFormat }) => (
+    <span className="text-sm text-bambu-gray">{formatInventoryDate(spool.loaded_at || null, dateFormat)}</span>
+  ),
+  last_dried: ({ spool, dateFormat }) => (
+    <span className="text-sm text-bambu-gray">{formatInventoryDate(spool.last_dried || null, dateFormat)}</span>
+  ),
   label_weight: ({ spool }) => (
     <span className="text-sm text-white">{formatWeight(spool.label_weight)}</span>
   ),
@@ -423,6 +457,11 @@ const columnSortValues: Record<string, (spool: InventorySpool, assignmentMap: Re
     return `${a.printer_name || ''} ${formatSlotLabel(a.ams_id, a.tray_id, isHt, isExt)}${label}`;
   },
   storage_location: (s) => (s.storage_location || '').toLowerCase(),
+  workflow_status: (s) => (s.inventory_status || 'stored').toLowerCase(),
+  drying_status: (s) => (s.drying_status || 'dry').toLowerCase(),
+  storage_humidity: (s) => s.storage_box_humidity ?? -1,
+  loaded_at: (s) => s.loaded_at || '',
+  last_dried: (s) => s.last_dried || '',
   label_weight: (s) => s.label_weight,
   net: (s) => Math.max(0, s.label_weight - s.weight_used),
   gross: (s) => Math.max(0, s.label_weight - s.weight_used) + s.core_weight,
@@ -496,6 +535,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [csvImportOpen, setCsvImportOpen] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [locationsModalOpen, setLocationsModalOpen] = useState(false);
+  const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -1339,6 +1379,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
           <Button variant="secondary" onClick={() => setLocationsModalOpen(true)}>
             <MapPin className="w-4 h-4" />
             {t('locations.manage')}
+          </Button>
+          <Button variant="secondary" onClick={() => setWorkflowModalOpen(true)}>
+            <ScanLine className="w-4 h-4" />
+            Shelf workflow
           </Button>
           <Button
             variant="secondary"
@@ -2326,6 +2370,11 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         open={locationsModalOpen}
         onClose={() => setLocationsModalOpen(false)}
         onPickLocation={(id) => setStorageLocationFilter(String(id))}
+      />
+      <FilamentWorkflowModal
+        open={workflowModalOpen}
+        onClose={() => setWorkflowModalOpen(false)}
+        disabled={spoolmanMode}
       />
     </div>
   );

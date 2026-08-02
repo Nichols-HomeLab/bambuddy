@@ -6,10 +6,10 @@ the U1's four independent tools to four filament slots:
 
 | Bambuddy slot | U1 tool | UI label |
 |---|---|---|
-| 1 | `extruder` / T0 | Nozzle 1 |
-| 2 | `extruder1` / T1 | Nozzle 2 |
-| 3 | `extruder2` / T2 | Nozzle 3 |
-| 4 | `extruder3` / T3 | Nozzle 4 |
+| 1 | `extruder` / T0 | U1-T1 |
+| 2 | `extruder1` / T1 | U1-T2 |
+| 3 | `extruder2` / T2 | U1-T3 |
+| 4 | `extruder3` / T3 | U1-T4 |
 
 ## Add the printer
 
@@ -24,7 +24,7 @@ first enabled webcam returned by `/server/webcams/list`. The automatically
 detected stream and snapshot URLs remain editable as normal external-camera
 settings.
 
-Assign an inventory spool to **Nozzle 1–4** on the printer card. Bambuddy saves
+Assign an inventory spool to **U1-T1–U1-T4** on the printer card. Bambuddy saves
 that assignment and restores it after reconnecting. Slicer filament mapping
 uses the nozzle number as the Orca extruder ID.
 

@@ -1,11 +1,13 @@
 import json
 import logging
+import re
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,13 +24,21 @@ from backend.app.core.websocket import ws_manager
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.location import Location
+from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.user import User
-from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
+from backend.app.schemas.location import (
+    LocationCreate,
+    LocationResponse,
+    LocationUpdate,
+    WorkflowBootstrapResponse,
+    WorkflowMoveRequest,
+    WorkflowMoveResponse,
+)
 from backend.app.schemas.spool import (
     SpoolAssignmentCreate,
     SpoolAssignmentResponse,
@@ -46,6 +56,7 @@ from backend.app.services.location_service import (
     DUPLICATE_LOCATION_NAME,
     assign_location_name,
     count_internal_spools_at_location,
+    get_effective_location_humidity,
     get_location_by_id,
     get_location_by_name,
     location_name_key,
@@ -594,10 +605,60 @@ def _location_to_response(location: Location, spool_count: int) -> LocationRespo
         id=location.id,
         name=location.name,
         identifier=location.identifier,
+        parent_id=location.parent_id,
+        kind=location.kind or "storage",
+        capacity=location.capacity,
+        position_order=location.position_order,
+        humidity_pct=location.humidity_pct,
+        sensor_entity_id=location.sensor_entity_id,
+        linked_printer_id=location.linked_printer_id,
+        linked_ams_id=location.linked_ams_id,
+        linked_tray_id=location.linked_tray_id,
         spool_count=spool_count,
         created_at=location.created_at,
         updated_at=location.updated_at,
     )
+
+
+async def _validate_location_links(
+    db: AsyncSession,
+    *,
+    location_id: int | None,
+    parent_id: int | None,
+    linked_printer_id: int | None,
+) -> None:
+    if parent_id is not None:
+        if parent_id == location_id:
+            raise HTTPException(status_code=400, detail="A location cannot be its own parent")
+        parent = await get_location_by_id(db, parent_id)
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent location not found")
+        # Walk upward so an edit cannot create an indirect cycle.
+        seen = {location_id}
+        cursor = parent
+        while cursor is not None:
+            if cursor.id in seen:
+                raise HTTPException(status_code=400, detail="Location hierarchy would contain a cycle")
+            seen.add(cursor.id)
+            cursor = await get_location_by_id(db, cursor.parent_id) if cursor.parent_id else None
+    if linked_printer_id is not None:
+        printer = await db.get(Printer, linked_printer_id)
+        if not printer:
+            raise HTTPException(status_code=400, detail="Linked printer not found")
+
+
+async def _validate_location_identifier(
+    db: AsyncSession,
+    identifier: str | None,
+    *,
+    current_location_id: int | None = None,
+) -> None:
+    if not identifier:
+        return
+    result = await db.execute(select(Location.id).where(func.lower(Location.identifier) == identifier.lower()))
+    owners = [location_id for location_id in result.scalars().all() if location_id != current_location_id]
+    if owners:
+        raise HTTPException(status_code=409, detail="A location with this identifier already exists")
 
 
 @router.get("/locations", response_model=list[LocationResponse])
@@ -623,7 +684,14 @@ async def create_location(
     existing = await get_location_by_name(db, data.name)
     if existing:
         raise HTTPException(status_code=409, detail=DUPLICATE_LOCATION_NAME)
-    location = Location(identifier=data.identifier)
+    await _validate_location_links(
+        db,
+        location_id=None,
+        parent_id=data.parent_id,
+        linked_printer_id=data.linked_printer_id,
+    )
+    await _validate_location_identifier(db, data.identifier)
+    location = Location(**data.model_dump(exclude={"name"}))
     assign_location_name(location, data.name)
     db.add(location)
     try:
@@ -649,8 +717,35 @@ async def update_location(
         raise HTTPException(status_code=404, detail="Location not found")
 
     old_name = location.name
-    if data.identifier is not None:
-        location.identifier = data.identifier or None
+    fields = data.model_fields_set
+    proposed_parent_id = data.parent_id if "parent_id" in fields else location.parent_id
+    proposed_printer_id = data.linked_printer_id if "linked_printer_id" in fields else location.linked_printer_id
+    await _validate_location_links(
+        db,
+        location_id=location.id,
+        parent_id=proposed_parent_id,
+        linked_printer_id=proposed_printer_id,
+    )
+    if "identifier" in fields:
+        await _validate_location_identifier(db, data.identifier, current_location_id=location.id)
+
+    for field in (
+        "identifier",
+        "parent_id",
+        "kind",
+        "capacity",
+        "position_order",
+        "humidity_pct",
+        "sensor_entity_id",
+        "linked_printer_id",
+        "linked_ams_id",
+        "linked_tray_id",
+    ):
+        if field in fields:
+            value = getattr(data, field)
+            if field in {"identifier", "sensor_entity_id"} and value == "":
+                value = None
+            setattr(location, field, value)
 
     if data.name is not None and data.name != old_name:
         try:
@@ -687,6 +782,25 @@ async def update_location(
         await db.rollback()
         raise HTTPException(status_code=409, detail=DUPLICATE_LOCATION_NAME) from exc
     await db.refresh(location)
+    if "humidity_pct" in fields:
+        all_locations_result = await db.execute(select(Location))
+        all_locations = list(all_locations_result.scalars().all())
+        descendant_ids = {location.id}
+        changed = True
+        while changed:
+            changed = False
+            for candidate in all_locations:
+                if candidate.parent_id in descendant_ids and candidate.id not in descendant_ids:
+                    descendant_ids.add(candidate.id)
+                    changed = True
+        by_id = {candidate.id: candidate for candidate in all_locations}
+        for descendant_id in descendant_ids:
+            descendant = by_id.get(descendant_id, location)
+            effective_humidity = await get_effective_location_humidity(db, descendant)
+            await db.execute(
+                update(Spool).where(Spool.location_id == descendant_id).values(storage_box_humidity=effective_humidity)
+            )
+        await db.commit()
     settings = await _load_settings_map(db)
     counts = await _spool_counts_for_locations(db, [location], settings)
     await ws_manager.broadcast({"type": "inventory_changed"})
@@ -708,11 +822,323 @@ async def delete_location(
     counts = await _spool_counts_for_locations(db, [location], settings)
     if counts.get(location.id, 0) > 0:
         raise HTTPException(status_code=409, detail="Location has spools assigned and cannot be deleted")
+    child_count = await db.scalar(select(func.count()).select_from(Location).where(Location.parent_id == location.id))
+    if child_count:
+        raise HTTPException(status_code=409, detail="Location has child positions and cannot be deleted")
 
     await db.delete(location)
     await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
     return {"status": "deleted"}
+
+
+# ── Shelf / live-feeder workflow ────────────────────────────────────────────
+
+
+async def _ensure_workflow_location(
+    db: AsyncSession,
+    *,
+    name: str,
+    identifier: str,
+    parent_id: int | None,
+    kind: str,
+    capacity: int | None = None,
+    position_order: int | None = None,
+    linked_printer_id: int | None = None,
+    linked_ams_id: int | None = None,
+    linked_tray_id: int | None = None,
+) -> tuple[Location, bool, bool]:
+    result = await db.execute(select(Location).where(func.lower(Location.identifier) == identifier.lower()))
+    identifier_matches = list(result.scalars().all())
+    if len(identifier_matches) > 1:
+        raise HTTPException(status_code=409, detail=f"Duplicate destination identifier: {identifier}")
+    location = identifier_matches[0] if identifier_matches else None
+    if location is None:
+        location = await get_location_by_name(db, name)
+    created = location is None
+    if location is None:
+        location = Location()
+        assign_location_name(location, name)
+        db.add(location)
+    before = (
+        location.identifier,
+        location.parent_id,
+        location.kind,
+        location.capacity,
+        location.position_order,
+        location.linked_printer_id,
+        location.linked_ams_id,
+        location.linked_tray_id,
+    )
+    location.identifier = identifier
+    location.parent_id = parent_id
+    location.kind = kind
+    location.capacity = capacity
+    location.position_order = position_order
+    location.linked_printer_id = linked_printer_id
+    location.linked_ams_id = linked_ams_id
+    location.linked_tray_id = linked_tray_id
+    await db.flush()
+    after = (
+        location.identifier,
+        location.parent_id,
+        location.kind,
+        location.capacity,
+        location.position_order,
+        location.linked_printer_id,
+        location.linked_ams_id,
+        location.linked_tray_id,
+    )
+    return location, created, not created and before != after
+
+
+@router.post("/workflow/bootstrap", response_model=WorkflowBootstrapResponse)
+async def bootstrap_filament_workflow(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Create the recommended 30-roll shelf/U1/X1C layout idempotently."""
+    printer_result = await db.execute(select(Printer).where(Printer.is_active.is_(True)).order_by(Printer.id))
+    printers = list(printer_result.scalars().all())
+    u1 = next((p for p in printers if p.connection_type == "snapmaker_moonraker"), None)
+    x1c = next((p for p in printers if "X1C" in (p.model or "").upper()), None)
+
+    created = 0
+    updated = 0
+
+    async def ensure(**kwargs) -> Location:
+        nonlocal created, updated
+        loc, was_created, was_updated = await _ensure_workflow_location(db, **kwargs)
+        created += int(was_created)
+        updated += int(was_updated)
+        return loc
+
+    library = await ensure(name="Filament Library", identifier="FILAMENT-LIBRARY", parent_id=None, kind="shelf")
+    working = await ensure(name="Working Shelf", identifier="WORKING-SHELF", parent_id=None, kind="shelf")
+
+    for box_index, letter in enumerate("ABCDEF", start=1):
+        box = await ensure(
+            name=f"Storage Box {letter}",
+            identifier=f"BOX-{letter}",
+            parent_id=library.id,
+            kind="dry_box",
+            capacity=4,
+            position_order=box_index,
+        )
+        for position in range(1, 5):
+            await ensure(
+                name=f"BOX-{letter}-{position}",
+                identifier=f"BOX-{letter}-{position}",
+                parent_id=box.id,
+                kind="storage_slot",
+                capacity=1,
+                position_order=position,
+            )
+
+    u1_box = await ensure(
+        name="U1 Live Box", identifier="U1-LIVE-BOX", parent_id=working.id, kind="live_box", capacity=4
+    )
+    for tool in range(1, 5):
+        await ensure(
+            name=f"U1-T{tool}",
+            identifier=f"U1-T{tool}",
+            parent_id=u1_box.id,
+            kind="u1_tool",
+            capacity=1,
+            position_order=tool,
+            linked_printer_id=u1.id if u1 else None,
+            linked_ams_id=0 if u1 else None,
+            linked_tray_id=tool - 1 if u1 else None,
+        )
+
+    stage_box = await ensure(
+        name="X1C Staging Box", identifier="X1C-STAGING-BOX", parent_id=working.id, kind="staging_box", capacity=4
+    )
+    for position in range(1, 5):
+        is_external = position == 1
+        await ensure(
+            name="X1C External" if is_external else f"X1C-STAGE-{position}",
+            identifier="X1C-EXT" if is_external else f"X1C-STAGE-{position}",
+            parent_id=stage_box.id,
+            kind="x1c_external" if is_external else "storage_slot",
+            capacity=1,
+            position_order=position,
+            linked_printer_id=x1c.id if is_external and x1c else None,
+            linked_ams_id=255 if is_external and x1c else None,
+            linked_tray_id=0 if is_external and x1c else None,
+        )
+
+    ams = await ensure(name="X1C AMS", identifier="X1C-AMS", parent_id=working.id, kind="ams", capacity=4)
+    for slot in range(1, 5):
+        await ensure(
+            name=f"X1C-AMS-{slot}",
+            identifier=f"X1C-AMS-{slot}",
+            parent_id=ams.id,
+            kind="x1c_ams",
+            capacity=1,
+            position_order=slot,
+            linked_printer_id=x1c.id if x1c else None,
+            linked_ams_id=0 if x1c else None,
+            linked_tray_id=slot - 1 if x1c else None,
+        )
+
+    dryer = await ensure(name="Filament Dryer", identifier="DRYER", parent_id=working.id, kind="dryer")
+    await ensure(
+        name="DRYER-1", identifier="DRYER-1", parent_id=dryer.id, kind="dryer_slot", capacity=1, position_order=1
+    )
+
+    await db.commit()
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    return WorkflowBootstrapResponse(
+        created=created,
+        updated=updated,
+        total_positions=37,
+        u1_printer_id=u1.id if u1 else None,
+        x1c_printer_id=x1c.id if x1c else None,
+    )
+
+
+async def _find_workflow_spool(db: AsyncSession, raw_identifier: str) -> Spool | None:
+    raw = raw_identifier.strip()
+    spool_id: int | None = None
+    query_match = re.search(r"(?:[?&]spool=|SPOOL[-_: ]?)(\d+)", raw, flags=re.IGNORECASE)
+    if query_match:
+        spool_id = int(query_match.group(1))
+    elif raw.isdigit():
+        spool_id = int(raw)
+    if spool_id is not None:
+        return await db.get(Spool, spool_id)
+
+    normalized = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+    if not normalized:
+        return None
+    result = await db.execute(
+        select(Spool).where((func.upper(Spool.tag_uid) == normalized) | (func.upper(Spool.tray_uuid) == normalized))
+    )
+    return result.scalar_one_or_none()
+
+
+@router.post("/workflow/move", response_model=WorkflowMoveResponse)
+async def move_spool_by_scan(
+    data: WorkflowMoveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Move a spool to a QR/NFC destination and update its slot assignment."""
+    spool = await _find_workflow_spool(db, data.spool_identifier)
+    if not spool or spool.archived_at is not None:
+        raise HTTPException(status_code=404, detail="Active spool not found for that label")
+
+    destination_key = data.destination_identifier.strip()
+    result = await db.execute(
+        select(Location).where(
+            (func.lower(Location.identifier) == destination_key.lower())
+            | (Location.name_key == destination_key.lower())
+        )
+    )
+    destination_matches = list(result.scalars().all())
+    if len(destination_matches) > 1:
+        raise HTTPException(status_code=409, detail="Destination label is ambiguous")
+    destination = destination_matches[0] if destination_matches else None
+    if not destination:
+        raise HTTPException(status_code=404, detail="Destination label not found")
+    if destination.capacity is None:
+        raise HTTPException(status_code=400, detail="Scan a position label, not a shelf or box label")
+
+    occupied = await db.scalar(
+        select(func.count())
+        .select_from(Spool)
+        .where(Spool.location_id == destination.id, Spool.id != spool.id, Spool.archived_at.is_(None))
+    )
+    if occupied and occupied >= destination.capacity:
+        raise HTTPException(status_code=409, detail=f"{destination.name} is already occupied")
+
+    # One physical spool has one active feed destination.  Storage/dryer moves
+    # clear the old assignment; linked live positions replace the target slot.
+    previous_location = await get_location_by_id(db, spool.location_id) if spool.location_id else None
+    await db.execute(delete(SpoolAssignment).where(SpoolAssignment.spool_id == spool.id))
+    assignment: SpoolAssignment | None = None
+    printer: Printer | None = None
+    if destination.linked_printer_id is not None:
+        printer = await db.get(Printer, destination.linked_printer_id)
+        if not printer or destination.linked_ams_id is None or destination.linked_tray_id is None:
+            raise HTTPException(status_code=409, detail="Destination printer mapping is incomplete")
+        await db.execute(
+            delete(SpoolAssignment).where(
+                SpoolAssignment.printer_id == printer.id,
+                SpoolAssignment.ams_id == destination.linked_ams_id,
+                SpoolAssignment.tray_id == destination.linked_tray_id,
+            )
+        )
+        assignment = SpoolAssignment(
+            spool_id=spool.id,
+            printer_id=printer.id,
+            ams_id=destination.linked_ams_id,
+            tray_id=destination.linked_tray_id,
+        )
+        db.add(assignment)
+
+    now = datetime.now(timezone.utc)
+    spool.location_id = destination.id
+    spool.storage_location = destination.name
+    spool.storage_box_humidity = await get_effective_location_humidity(db, destination)
+    spool.loaded_at = now if assignment else None
+    if destination.kind == "dryer_slot":
+        spool.inventory_status = "drying"
+        spool.drying_status = "drying"
+    else:
+        if previous_location and previous_location.kind == "dryer_slot":
+            spool.drying_status = "dry"
+            spool.last_dried = now
+        if printer and printer.connection_type == "snapmaker_moonraker":
+            spool.inventory_status = "loaded_u1"
+        elif assignment and destination.linked_ams_id == 255:
+            spool.inventory_status = "loaded_x1c_external"
+        elif assignment:
+            spool.inventory_status = "loaded_x1c_ams"
+        else:
+            spool.inventory_status = "stored"
+
+    await db.commit()
+    await db.refresh(destination)
+    if assignment:
+        await db.refresh(assignment)
+
+    # Keep Bambu's slot configuration behaviour when a scan loads an AMS or
+    # external feed.  The durable DB move succeeds even if the printer is
+    # offline; its assignment remains visible for the normal deferred flow.
+    if assignment and printer and printer.connection_type != "snapmaker_moonraker":
+        try:
+            await apply_spool_to_slot_via_mqtt(
+                db=db,
+                current_user=current_user,
+                spool=spool,
+                printer_id=printer.id,
+                ams_id=assignment.ams_id,
+                tray_id=assignment.tray_id,
+            )
+        except Exception as exc:
+            logger.warning("Scan move saved but printer slot configuration failed: %s", exc)
+
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    if assignment:
+        await ws_manager.broadcast(
+            {
+                "type": "spool_assignment_changed",
+                "printer_id": assignment.printer_id,
+                "ams_id": assignment.ams_id,
+                "tray_id": assignment.tray_id,
+            }
+        )
+    label = " ".join(part for part in (spool.brand, spool.color_name, spool.material, f"#{spool.id}") if part)
+    return WorkflowMoveResponse(
+        spool_id=spool.id,
+        spool_label=label,
+        location=_location_to_response(destination, 1),
+        inventory_status=spool.inventory_status,
+        assignment_id=assignment.id if assignment else None,
+        assignment_label=destination.identifier if assignment else None,
+    )
 
 
 # ── Color Catalog CRUD ─────────────────────────────────────────────────────
@@ -1766,6 +2192,33 @@ async def assign_spool(
         fingerprint_type=fingerprint_type,
     )
     db.add(assignment)
+
+    printer_record = await db.get(Printer, data.printer_id)
+    mapped_location_result = await db.execute(
+        select(Location).where(
+            Location.linked_printer_id == data.printer_id,
+            Location.linked_ams_id == data.ams_id,
+            Location.linked_tray_id == data.tray_id,
+        )
+    )
+    mapped_location = mapped_location_result.scalar_one_or_none()
+    if mapped_location:
+        occupied = await db.scalar(
+            select(func.count())
+            .select_from(Spool)
+            .where(Spool.location_id == mapped_location.id, Spool.id != spool.id, Spool.archived_at.is_(None))
+        )
+        if not occupied:
+            spool.location_id = mapped_location.id
+            spool.storage_location = mapped_location.name
+            spool.storage_box_humidity = await get_effective_location_humidity(db, mapped_location)
+    spool.loaded_at = datetime.now(timezone.utc)
+    if printer_record and printer_record.connection_type == "snapmaker_moonraker":
+        spool.inventory_status = "loaded_u1"
+    elif data.ams_id == 255:
+        spool.inventory_status = "loaded_x1c_external"
+    else:
+        spool.inventory_status = "loaded_x1c_ams"
     await db.commit()
     await db.refresh(assignment)
 
@@ -1891,7 +2344,11 @@ async def unassign_spool(
     if not assignment:
         raise HTTPException(404, "Assignment not found")
 
+    spool = await db.get(Spool, assignment.spool_id)
     await db.delete(assignment)
+    if spool:
+        spool.inventory_status = "stored"
+        spool.loaded_at = None
     await db.commit()
 
     await ws_manager.broadcast(

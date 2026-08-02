@@ -126,6 +126,11 @@ class SpoolBase(BaseModel):
     # but was missing from this schema, so writes were silently dropped (#1291).
     storage_location: str | None = Field(default=None, max_length=255)
     location_id: int | None = Field(default=None, gt=0)
+    inventory_status: str = Field(default="stored", max_length=30)
+    drying_status: str = Field(default="dry", max_length=30)
+    last_dried: datetime | None = None
+    loaded_at: datetime | None = None
+    storage_box_humidity: float | None = Field(default=None, ge=0, le=100)
 
 
 class SpoolCreate(SpoolBase):
@@ -176,6 +181,11 @@ class SpoolUpdate(BaseModel):
     low_stock_threshold_pct: int | None = Field(default=None, ge=1, le=99)
     storage_location: str | None = Field(default=None, max_length=255)
     location_id: int | None = Field(default=None, gt=0)
+    inventory_status: str | None = Field(default=None, max_length=30)
+    drying_status: str | None = Field(default=None, max_length=30)
+    last_dried: datetime | None = None
+    loaded_at: datetime | None = None
+    storage_box_humidity: float | None = Field(default=None, ge=0, le=100)
 
 
 class SpoolKProfileBase(BaseModel):

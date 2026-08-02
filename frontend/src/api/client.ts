@@ -1480,6 +1480,15 @@ export interface StorageLocation {
   id: number;
   name: string;
   identifier: string | null;
+  parent_id?: number | null;
+  kind?: string;
+  capacity?: number | null;
+  position_order?: number | null;
+  humidity_pct?: number | null;
+  sensor_entity_id?: string | null;
+  linked_printer_id?: number | null;
+  linked_ams_id?: number | null;
+  linked_tray_id?: number | null;
   spool_count: number;
   created_at: string;
   updated_at: string;
@@ -2996,6 +3005,28 @@ export interface InventorySpool {
   k_profiles?: SpoolKProfile[];
   storage_location?: string | null;
   location_id?: number | null;
+  inventory_status?: 'stored' | 'loaded_u1' | 'loaded_x1c_ams' | 'loaded_x1c_external' | 'drying' | 'needs_drying' | 'empty' | string;
+  drying_status?: 'dry' | 'drying' | 'needs_drying' | string;
+  last_dried?: string | null;
+  loaded_at?: string | null;
+  storage_box_humidity?: number | null;
+}
+
+export interface WorkflowBootstrapResult {
+  created: number;
+  updated: number;
+  total_positions: number;
+  u1_printer_id: number | null;
+  x1c_printer_id: number | null;
+}
+
+export interface WorkflowMoveResult {
+  spool_id: number;
+  spool_label: string;
+  location: StorageLocation;
+  inventory_status: string;
+  assignment_id: number | null;
+  assignment_label: string | null;
 }
 
 export interface SpoolmanBulkCreateResult {
@@ -5521,10 +5552,26 @@ export const api = {
     request<StorageLocation[]>('/inventory/locations'),
   createLocation: (data: { name: string; identifier?: string | null }) =>
     request<StorageLocation>('/inventory/locations', { method: 'POST', body: JSON.stringify(data) }),
-  updateLocation: (id: number, data: { name?: string; identifier?: string | null }) =>
+  updateLocation: (id: number, data: {
+    name?: string;
+    identifier?: string | null;
+    parent_id?: number | null;
+    kind?: string | null;
+    capacity?: number | null;
+    position_order?: number | null;
+    humidity_pct?: number | null;
+    sensor_entity_id?: string | null;
+    linked_printer_id?: number | null;
+    linked_ams_id?: number | null;
+    linked_tray_id?: number | null;
+  }) =>
     request<StorageLocation>(`/inventory/locations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteLocation: (id: number) =>
     request<{ status: string }>(`/inventory/locations/${id}`, { method: 'DELETE' }),
+  bootstrapFilamentWorkflow: () =>
+    request<WorkflowBootstrapResult>('/inventory/workflow/bootstrap', { method: 'POST' }),
+  moveSpoolByScan: (data: { spool_identifier: string; destination_identifier: string }) =>
+    request<WorkflowMoveResult>('/inventory/workflow/move', { method: 'POST', body: JSON.stringify(data) }),
   getColorCatalog: () =>
     request<ColorCatalogEntry[]>('/inventory/colors'),
   getColorNameMap: () =>

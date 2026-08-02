@@ -2,6 +2,12 @@
 
 All notable changes to Bambuddy will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **Filament shelf workflow for the custom Snapmaker U1 + X1C setup** — Adds an idempotent 37-position shelf map, hierarchical dry-box positions, permanent `U1-T1` through `U1-T4` feeds, X1C AMS/external staging, QR/NFC spool-to-destination moves, position capacity checks, humidity/sensor metadata, and separate physical-location, printer-assignment, load, and drying state. Inventory gains live-feed cards, status/humidity columns, dryer entry/exit tracking, and CSV round-tripping for the new fields.
+
 ## [1.2.5.1] - 2026-07-27
 
 ### Fixed

@@ -62,6 +62,14 @@ class Spool(Base):
 
     storage_location: Mapped[str | None] = mapped_column(String(255))  # User-editable storage location
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"), index=True)
+    # Workflow state is deliberately separate from physical location and from
+    # printer assignment.  A U1 spool can therefore be physically in its live
+    # dry box while also assigned to one of the four tools.
+    inventory_status: Mapped[str] = mapped_column(String(30), default="stored")
+    drying_status: Mapped[str] = mapped_column(String(30), default="dry")
+    last_dried: Mapped[datetime | None] = mapped_column(DateTime)
+    loaded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    storage_box_humidity: Mapped[float | None] = mapped_column(Float)
 
     last_used: Mapped[datetime | None] = mapped_column(DateTime)  # Last time this spool was used in a print
     encode_time: Mapped[datetime | None] = mapped_column(DateTime)  # When spool was encoded/written to tag

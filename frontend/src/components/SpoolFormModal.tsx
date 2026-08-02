@@ -358,6 +358,9 @@ export function SpoolFormModal({
           category: spool.category || '',
           low_stock_threshold_pct: spool.low_stock_threshold_pct ?? null,
           location_id: spool.location_id ?? null,
+          inventory_status: spool.inventory_status || 'stored',
+          drying_status: spool.drying_status || 'dry',
+          last_dried: spool.last_dried ? spool.last_dried.slice(0, 16) : '',
           spoolman_filament_id: null,
         });
         setPresetInputValue(spool.slicer_filament_name || spool.slicer_filament || '');
@@ -747,6 +750,11 @@ export function SpoolFormModal({
       cost_per_kg: formData.cost_per_kg,
       category: formData.category.trim() || null,
       low_stock_threshold_pct: formData.low_stock_threshold_pct,
+      ...(spoolmanMode ? {} : {
+        inventory_status: formData.inventory_status,
+        drying_status: formData.drying_status,
+        last_dried: formData.last_dried || null,
+      }),
       ...(spoolmanMode ? { spoolman_filament_id: formData.spoolman_filament_id } : {}),
     };
 

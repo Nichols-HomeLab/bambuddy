@@ -3581,8 +3581,37 @@ async def run_migrations(conn):
         """,
     )
     await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN name_key VARCHAR(255)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN parent_id INTEGER REFERENCES locations(id)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN kind VARCHAR(30) DEFAULT 'storage'")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN capacity INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN position_order INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN humidity_pct FLOAT")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN sensor_entity_id VARCHAR(255)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN linked_printer_id INTEGER REFERENCES printers(id)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN linked_ams_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN linked_tray_id INTEGER")
     await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_locations_name_key ON locations (name_key)")
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_locations_identifier_key ON locations (LOWER(identifier))",
+    )
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_locations_parent_id ON locations (parent_id)")
     await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN location_id INTEGER REFERENCES locations(id)")
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN inventory_status VARCHAR(30) DEFAULT 'stored'")
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN drying_status VARCHAR(30) DEFAULT 'dry'")
+    await _safe_execute(
+        conn,
+        "ALTER TABLE spool ADD COLUMN last_dried DATETIME"
+        if is_sqlite()
+        else "ALTER TABLE spool ADD COLUMN last_dried TIMESTAMP",
+    )
+    await _safe_execute(
+        conn,
+        "ALTER TABLE spool ADD COLUMN loaded_at DATETIME"
+        if is_sqlite()
+        else "ALTER TABLE spool ADD COLUMN loaded_at TIMESTAMP",
+    )
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN storage_box_humidity FLOAT")
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_location_id ON spool (location_id)")
 
     # Backfill name_key on legacy rows FIRST. If a pre-existing locations

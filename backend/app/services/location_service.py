@@ -43,6 +43,7 @@ class SpoolLocationFields:
 
     location_id: int | None
     storage_location: str | None
+    storage_box_humidity: float | None
 
 
 async def get_location_by_id(db: AsyncSession, location_id: int) -> Location | None:
@@ -54,6 +55,18 @@ async def get_location_by_name(db: AsyncSession, name: str) -> Location | None:
     key = location_name_key(name)
     result = await db.execute(select(Location).where(Location.name_key == key))
     return result.scalar_one_or_none()
+
+
+async def get_effective_location_humidity(db: AsyncSession, location: Location) -> float | None:
+    """Return humidity from a position or its nearest parent dry box."""
+    cursor: Location | None = location
+    seen: set[int] = set()
+    while cursor is not None and cursor.id not in seen:
+        seen.add(cursor.id)
+        if cursor.humidity_pct is not None:
+            return cursor.humidity_pct
+        cursor = await get_location_by_id(db, cursor.parent_id) if cursor.parent_id else None
+    return None
 
 
 async def get_locations_by_name_keys(db: AsyncSession, keys: set[str]) -> dict[str, Location]:
@@ -131,19 +144,27 @@ async def resolve_spool_location_fields(
     """
     if "location_id" in fields_set:
         if location_id is None:
-            return SpoolLocationFields(location_id=None, storage_location=None)
+            return SpoolLocationFields(location_id=None, storage_location=None, storage_box_humidity=None)
         loc = await get_location_by_id(db, location_id)
         if not loc:
             raise ValueError(f"Location {location_id} not found")
-        return SpoolLocationFields(location_id=loc.id, storage_location=loc.name)
+        return SpoolLocationFields(
+            location_id=loc.id,
+            storage_location=loc.name,
+            storage_box_humidity=await get_effective_location_humidity(db, loc),
+        )
 
     if "storage_location" in fields_set:
         if not storage_location:
-            return SpoolLocationFields(location_id=None, storage_location=None)
+            return SpoolLocationFields(location_id=None, storage_location=None, storage_box_humidity=None)
         loc = await resolve_location_by_name(db, storage_location)
         if not loc:
-            return SpoolLocationFields(location_id=None, storage_location=None)
-        return SpoolLocationFields(location_id=loc.id, storage_location=loc.name)
+            return SpoolLocationFields(location_id=None, storage_location=None, storage_box_humidity=None)
+        return SpoolLocationFields(
+            location_id=loc.id,
+            storage_location=loc.name,
+            storage_box_humidity=await get_effective_location_humidity(db, loc),
+        )
 
     return None
 
@@ -160,6 +181,7 @@ async def prepare_internal_spool_payload(db: AsyncSession, data: dict, fields_se
     if resolved is not None:
         payload["location_id"] = resolved.location_id
         payload["storage_location"] = resolved.storage_location
+        payload["storage_box_humidity"] = resolved.storage_box_humidity
     return payload
 
 

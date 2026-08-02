@@ -37,6 +37,9 @@ export interface SpoolFormData {
   category: string;
   low_stock_threshold_pct: number | null;
   location_id: number | null;
+  inventory_status: string;
+  drying_status: string;
+  last_dried: string;
   // When set the spool is linked to a specific Spoolman filament catalog entry;
   // the backend skips find_or_create_filament() and uses this ID directly.
   spoolman_filament_id: number | null;
@@ -60,6 +63,9 @@ export const defaultFormData: SpoolFormData = {
   category: '',
   low_stock_threshold_pct: null,
   location_id: null,
+  inventory_status: 'stored',
+  drying_status: 'dry',
+  last_dried: '',
   spoolman_filament_id: null,
 };
 

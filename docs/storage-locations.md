@@ -1,10 +1,10 @@
 # Storage Locations (#1004)
 
-Structured storage locations let you manage physical shelves, drawers, and dryboxes as a catalog instead of free-text only.
+Structured storage locations let you manage physical shelves, drawers, and dryboxes as a catalog instead of free-text only. The custom [filament shelf workflow](filament-shelf-workflow.md) extends the catalog with parent/child boxes, capacity-one positions, humidity sensors, and linked printer destinations.
 
 ## Architecture
 
-- **`locations` table** — catalog of named storage spots (`name` + case-insensitive `name_key`).
+- **`locations` table** — catalog of named storage spots (`name` + case-insensitive `name_key`), optional parent box, capacity, QR/NFC identifier, humidity sensor, and printer destination mapping.
 - **`spool.location_id`** — source of truth for structured assignment.
 - **`spool.storage_location`** — denormalized display string and Spoolman wire format; always derived on write via `location_service.resolve_spool_location_fields()`.
 - **Frontend** — spool form sends only `location_id`; backend fills `storage_location`.

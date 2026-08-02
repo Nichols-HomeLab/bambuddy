@@ -4803,7 +4803,7 @@ function PrinterCard({
                                     </div>
                                     {printer.connection_type === 'snapmaker_moonraker' && (
                                       <div className="text-[8px] text-bambu-green font-semibold">
-                                        Nozzle {(slotExtruderId ?? slotIdx) + 1}
+                                        U1-T{(slotExtruderId ?? slotIdx) + 1}
                                       </div>
                                     )}
                                     {/* Fill bar */}
@@ -4890,7 +4890,7 @@ function PrinterCard({
                                                   profile: filamentData.profile,
                                                   color: filamentData.colorHex || '',
                                                   location: printer.connection_type === 'snapmaker_moonraker'
-                                                    ? `Nozzle ${slotIdx + 1}`
+                                                    ? `U1-T${slotIdx + 1}`
                                                     : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                                 },
                                               }),
@@ -4917,7 +4917,7 @@ function PrinterCard({
                                                 profile: filamentData.profile,
                                                 color: filamentData.colorHex || '',
                                                 location: printer.connection_type === 'snapmaker_moonraker'
-                                                  ? `Nozzle ${slotIdx + 1}`
+                                                  ? `U1-T${slotIdx + 1}`
                                                   : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                               },
                                             }),
@@ -4971,7 +4971,7 @@ function PrinterCard({
                                             profile: '',
                                             color: '',
                                             location: printer.connection_type === 'snapmaker_moonraker'
-                                              ? `Nozzle ${slotIdx + 1}`
+                                              ? `U1-T${slotIdx + 1}`
                                               : `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
                                           },
                                         })}

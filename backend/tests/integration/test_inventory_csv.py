@@ -457,6 +457,9 @@ class TestInventoryCsvExtraColumns:
                 color_name="White",
                 rgba="ffffffff",
                 storage_location="Shelf B3",
+                inventory_status="needs_drying",
+                drying_status="needs_drying",
+                storage_box_humidity=31.5,
                 category="Production",
                 low_stock_threshold_pct=20,
             )
@@ -474,6 +477,9 @@ class TestInventoryCsvExtraColumns:
 
         spool = (await db_session.execute(select(Spool))).scalars().one()
         assert spool.storage_location == "Shelf B3"
+        assert spool.inventory_status == "needs_drying"
+        assert spool.drying_status == "needs_drying"
+        assert spool.storage_box_humidity == 31.5
         assert spool.category == "Production"
         assert spool.low_stock_threshold_pct == 20
 

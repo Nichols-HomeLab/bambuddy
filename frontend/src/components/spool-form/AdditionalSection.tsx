@@ -441,6 +441,57 @@ export function AdditionalSection({
           </div>
         )}
       </div>
+
+      {!spoolmanMode && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-bambu-gray mb-1" htmlFor="spool-workflow-status">
+              Workflow status
+            </label>
+            <select
+              id="spool-workflow-status"
+              value={formData.inventory_status}
+              onChange={(e) => updateField('inventory_status', e.target.value)}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
+            >
+              <option value="stored">Stored</option>
+              <option value="loaded_u1">Loaded – U1</option>
+              <option value="loaded_x1c_ams">Loaded – X1C AMS</option>
+              <option value="loaded_x1c_external">Loaded – X1C External</option>
+              <option value="drying">Drying</option>
+              <option value="needs_drying">Needs drying</option>
+              <option value="empty">Empty</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-bambu-gray mb-1" htmlFor="spool-drying-status">
+              Drying condition
+            </label>
+            <select
+              id="spool-drying-status"
+              value={formData.drying_status}
+              onChange={(e) => updateField('drying_status', e.target.value)}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
+            >
+              <option value="dry">Dry</option>
+              <option value="drying">Drying</option>
+              <option value="needs_drying">Needs drying</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-bambu-gray mb-1" htmlFor="spool-last-dried">
+              Last dried
+            </label>
+            <input
+              id="spool-last-dried"
+              type="datetime-local"
+              value={formData.last_dried}
+              onChange={(e) => updateField('last_dried', e.target.value)}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

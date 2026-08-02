@@ -52,6 +52,11 @@ CSV_COLUMNS = [
     "last_used",
     "note",
     "storage_location",
+    "inventory_status",
+    "drying_status",
+    "last_dried",
+    "loaded_at",
+    "storage_box_humidity",
     "category",
     "low_stock_threshold_pct",
 ]
@@ -70,7 +75,7 @@ _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 # DictReader hands us strings; SpoolCreate wants int/float. Empty cell → omit
 # the field (falls back to the schema default / None).
 _INT_COLUMNS = {"label_weight", "nozzle_temp_min", "nozzle_temp_max", "low_stock_threshold_pct"}
-_FLOAT_COLUMNS = {"cost_per_kg", "weight_used"}
+_FLOAT_COLUMNS = {"cost_per_kg", "weight_used", "storage_box_humidity"}
 
 # label_weight default, pulled from the schema so the weight_used bounds check
 # stays in sync if the schema default ever changes.
@@ -351,7 +356,18 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
         row_error: str | None = None
 
         # Plain text passthrough columns.
-        for field in ("subtype", "effect_type", "extra_colors", "note", "storage_location", "category"):
+        for field in (
+            "subtype",
+            "effect_type",
+            "extra_colors",
+            "note",
+            "storage_location",
+            "inventory_status",
+            "drying_status",
+            "last_dried",
+            "loaded_at",
+            "category",
+        ):
             value = cell(raw_row, field)
             if value:
                 data[field] = value
